@@ -1,0 +1,50 @@
+{
+  "name": "pi-subscription-usage",
+  "version": "0.1.0",
+  "description": "A Pi footer for live Codex and Claude subscription usage",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "codex",
+    "claude",
+    "usage"
+  ],
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.11",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@effect/vitest": "^0.30.0",
+    "@types/node": "^22.19.0",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.7"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "vitest run",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "typecheck": "tsc --noEmit",
+    "check:package": "npm pack --dry-run",
+    "check": "npm run lint && npm run typecheck && npm test && npm run check:package"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "effect": "3.22.2"
+  }
+}
