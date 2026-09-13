@@ -30,7 +30,7 @@
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@effect/vitest": "^0.30.0",
     "@types/node": "^22.19.0",
-    "typescript": "^5.9.3",
+    "typescript": "^7.0.2",
     "vitest": "^3.2.7"
   },
   "pi": {
