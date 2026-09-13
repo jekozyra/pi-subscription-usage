@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { Effect } from "effect";
+import { it } from "@effect/vitest";
+import { Clock, Effect, TestClock } from "effect";
 import { test } from "vitest";
 
 import type { AcquiredClaudeSubscriptionUsage } from "../src/claude-subscription-usage-acquisition.ts";
@@ -7,9 +8,10 @@ import {
   type AcquiredWeeklyQuotaUsage,
   TemporaryAcquisitionFailure,
 } from "../src/dedicated-weekly-quota-acquisition.ts";
-import type {
-  MonitoredProviderName,
-  WeeklySubscriptionUsageStatus,
+import {
+  type MonitoredProviderName,
+  presentSubscriptionUsageLines,
+  type WeeklySubscriptionUsageStatus,
 } from "../src/presentation.ts";
 import {
   makeWeeklySubscriptionUsageSession,
@@ -36,13 +38,14 @@ function sessionDependencies(
       statuses: Readonly<
         Record<MonitoredProviderName, WeeklySubscriptionUsageStatus>
       >,
+      nowMs: number,
     ) => void;
   } = {},
 ): WeeklySubscriptionUsageSessionDependencies {
   return {
     now: options.now ?? Effect.succeed(1_000_000),
-    present: (statuses) =>
-      Effect.sync(() => options.present?.(structuredClone(statuses))),
+    present: (statuses, nowMs) =>
+      Effect.sync(() => options.present?.(structuredClone(statuses), nowMs)),
     codex: {
       resolveCredential: Effect.succeed({
         kind: "available",
@@ -63,6 +66,51 @@ function sessionDependencies(
     }),
   };
 }
+
+it.effect("keeps countdowns aligned across sessions", () =>
+  Effect.gen(function* () {
+    const resetAtMs = 125_000;
+    const first = yield* makeWeeklySubscriptionUsageSession();
+    const second = yield* makeWeeklySubscriptionUsageSession();
+    const firstPresentations: Array<{
+      readonly nowMs: number;
+      readonly text: string;
+    }> = [];
+    const secondPresentations: Array<{
+      readonly nowMs: number;
+      readonly text: string;
+    }> = [];
+    const dependencies = (
+      presentations: Array<{ readonly nowMs: number; readonly text: string }>,
+    ) =>
+      sessionDependencies({
+        now: Clock.currentTimeMillis,
+        acquireCodex: Effect.succeed({ ...codexUsage, resetsAtMs: resetAtMs }),
+        present: (statuses, nowMs) => {
+          const text = presentSubscriptionUsageLines(statuses, nowMs)
+            .codex.map((segment) => segment.text)
+            .join("");
+          if (statuses.Codex.kind === "available") {
+            presentations.push({ nowMs, text });
+          }
+        },
+      });
+
+    yield* first.start(dependencies(firstPresentations));
+    yield* TestClock.adjust("500 millis");
+    yield* second.start(dependencies(secondPresentations));
+    yield* TestClock.adjust("4501 millis");
+
+    const expected = {
+      nowMs: 5_001,
+      text: "Codex   week 20% · resets 1m",
+    };
+    assert.deepEqual(firstPresentations.at(-1), expected);
+    assert.deepEqual(secondPresentations.at(-1), expected);
+
+    yield* Effect.all([first.shutdown, second.shutdown]);
+  }),
+);
 
 test("shutdown interrupts active session work", async () => {
   const session = await Effect.runPromise(makeWeeklySubscriptionUsageSession());

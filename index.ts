@@ -58,7 +58,9 @@ function installSubscriptionFooter(ctx: ExtensionContext): void {
           width,
           "",
         );
-        const usage = footerData.getExtensionStatuses().get("pi-subscription-usage");
+        const usage = footerData
+          .getExtensionStatuses()
+          .get("pi-subscription-usage");
         const usageLines = usage?.split("\n") ?? [
           theme.fg("dim", "Claude  loading…"),
           theme.fg("dim", "Codex   loading…"),

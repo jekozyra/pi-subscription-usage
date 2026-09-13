@@ -47,6 +47,39 @@ export interface WeeklySubscriptionUsageSession {
   readonly shutdown: Effect.Effect<void>;
 }
 
+const MINUTE_MS = 60_000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MINUTES = 24 * 60;
+
+function nextCountdownPresentationDelay(
+  statuses: Readonly<
+    Record<MonitoredProviderName, WeeklySubscriptionUsageStatus>
+  >,
+  nowMs: number,
+): number | undefined {
+  let nextDelay: number | undefined;
+  for (const status of Object.values(statuses)) {
+    if (status.kind !== "available") continue;
+    for (const resetAtMs of [
+      status.sessionWindowResetsAtMs,
+      status.weeklyWindowResetsAtMs,
+    ]) {
+      if (resetAtMs === undefined || !Number.isFinite(resetAtMs)) continue;
+      const remainingMs = resetAtMs - nowMs;
+      if (remainingMs <= 0) continue;
+      const totalMinutes = Math.floor(remainingMs / MINUTE_MS);
+      const delay =
+        totalMinutes <= 1
+          ? remainingMs
+          : (remainingMs %
+              (totalMinutes >= DAY_MINUTES ? HOUR_MS : MINUTE_MS)) +
+            1;
+      nextDelay = nextDelay === undefined ? delay : Math.min(nextDelay, delay);
+    }
+  }
+  return nextDelay;
+}
+
 interface Session {
   readonly id: number;
   readonly scope: Scope.CloseableScope;
@@ -99,15 +132,41 @@ export function makeWeeklySubscriptionUsageSession(): Effect.Effect<WeeklySubscr
                 Codex: { kind: "loading" },
                 Claude: { kind: "loading" },
               };
+              const presentCurrent = Effect.gen(function* () {
+                if (session?.id !== id) return;
+                const now = yield* dependencies.now;
+                if (session?.id !== id) return;
+                yield* dependencies.present(statuses, now);
+              });
+              const countdownGate = yield* Effect.makeSemaphore(1);
+              let countdownFiber: Fiber.RuntimeFiber<void> | undefined;
+              const countdownLoop = Effect.forever(
+                Effect.gen(function* () {
+                  if (session?.id !== id) return yield* Effect.interrupt;
+                  const now = yield* dependencies.now;
+                  const delay = nextCountdownPresentationDelay(statuses, now);
+                  if (delay === undefined) return yield* Effect.never;
+                  yield* Effect.sleep(delay);
+                  yield* presentCurrent;
+                }),
+              );
+              const restartCountdown = countdownGate.withPermits(1)(
+                Effect.gen(function* () {
+                  const previous = countdownFiber;
+                  countdownFiber = undefined;
+                  if (previous !== undefined) yield* Fiber.interrupt(previous);
+                  if (session?.id !== id) return;
+                  countdownFiber = yield* Effect.forkIn(countdownLoop, scope);
+                }),
+              );
               const publish =
                 (providerName: MonitoredProviderName) =>
                 (status: WeeklySubscriptionUsageStatus) =>
                   Effect.gen(function* () {
                     if (session?.id !== id) return;
-                    const now = yield* dependencies.now;
-                    if (session?.id !== id) return;
                     statuses[providerName] = status;
-                    yield* dependencies.present(statuses, now);
+                    yield* presentCurrent;
+                    yield* restartCountdown;
                   });
               const monitorLayers = Layer.merge(
                 codexProviderMonitorLayer({
