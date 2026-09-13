@@ -173,7 +173,7 @@ describe("provider acquisition coordination", () => {
     };
 
     await Effect.runPromise(coordinator.coordinate(coordinatedRequest));
-    const stored = await storedContents(join(root, "pi-usage"));
+    const stored = await storedContents(join(root, "pi-subscription-usage"));
 
     assert.equal(stored.includes(credential), false);
     assert.equal(
@@ -197,7 +197,12 @@ describe("provider acquisition coordination", () => {
         ),
       ),
     );
-    const entriesPath = join(root, "pi-usage", "acquisition-v1", "entries");
+    const entriesPath = join(
+      root,
+      "pi-subscription-usage",
+      "acquisition-v1",
+      "entries",
+    );
     const [oldEntry] = await readdir(entriesPath);
     assert.ok(oldEntry);
     const oldTime = new Date(Date.now() - 25 * 60 * 60_000);
@@ -565,7 +570,12 @@ describe("provider acquisition coordination", () => {
       );
       now += 180_000;
     }
-    const entriesPath = join(root, "pi-usage", "acquisition-v1", "entries");
+    const entriesPath = join(
+      root,
+      "pi-subscription-usage",
+      "acquisition-v1",
+      "entries",
+    );
     const [entryName] = await readdir(entriesPath);
     assert.ok(entryName);
     const generations = (await readdir(join(entriesPath, entryName))).filter(
@@ -654,7 +664,12 @@ describe("provider acquisition coordination", () => {
         ),
       ),
     );
-    const entriesPath = join(root, "pi-usage", "acquisition-v1", "entries");
+    const entriesPath = join(
+      root,
+      "pi-subscription-usage",
+      "acquisition-v1",
+      "entries",
+    );
     const [entryName] = await readdir(entriesPath);
     assert.ok(entryName);
     const entryPath = join(entriesPath, entryName);
@@ -684,7 +699,7 @@ describe("provider acquisition coordination", () => {
 
   test("fails closed when an existing application directory is not private", async () => {
     const root = await runtimeRoot();
-    await mkdir(join(root, "pi-usage", "acquisition-v1"), {
+    await mkdir(join(root, "pi-subscription-usage", "acquisition-v1"), {
       recursive: true,
       mode: 0o755,
     });

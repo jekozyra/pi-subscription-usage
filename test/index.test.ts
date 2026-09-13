@@ -27,7 +27,7 @@ test("package entry point registers the Codex quota lifecycle", () => {
 
 test("warns only once per process when secure coordination is unavailable", async () => {
   const warningSymbol = Symbol.for(
-    "@yasuhito/pi-usage/coordination-warning-shown",
+    "pi-subscription-usage/coordination-warning-shown",
   );
   Reflect.deleteProperty(globalThis, warningSymbol);
   const previousRuntimeDirectory = process.env.XDG_RUNTIME_DIR;

@@ -13,7 +13,7 @@ import { createFileProviderAcquisitionCoordinator } from "./src/provider-acquisi
 import { registerWeeklySubscriptionUsage } from "./src/register.ts";
 
 const COORDINATION_WARNING_SHOWN = Symbol.for(
-  "@yasuhito/pi-usage/coordination-warning-shown",
+  "pi-subscription-usage/coordination-warning-shown",
 );
 
 function showCoordinationWarningOnce(notify: () => void): void {
@@ -58,7 +58,7 @@ function installSubscriptionFooter(ctx: ExtensionContext): void {
           width,
           "",
         );
-        const usage = footerData.getExtensionStatuses().get("pi-usage");
+        const usage = footerData.getExtensionStatuses().get("pi-subscription-usage");
         const usageLines = usage?.split("\n") ?? [
           theme.fg("dim", "Claude  loading…"),
           theme.fg("dim", "Codex   loading…"),

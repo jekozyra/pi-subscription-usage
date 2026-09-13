@@ -16,7 +16,7 @@ import type {
 import { presentSubscriptionUsageLines } from "./presentation.ts";
 import { makeWeeklySubscriptionUsageSession } from "./weekly-subscription-usage-session.ts";
 
-const STATUS_KEY = "pi-usage";
+const STATUS_KEY = "pi-subscription-usage";
 
 export interface WeeklySubscriptionUsageDependencies {
   readonly acquireDedicatedWeeklyQuotaUsage: AcquireDedicatedWeeklyQuotaUsage;

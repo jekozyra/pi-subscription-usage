@@ -189,7 +189,7 @@ async function initializeRuntime(
     throw new Error("a secure XDG_RUNTIME_DIR is required");
   }
   await validatePrivateDirectory(runtimeDirectory);
-  const applicationRoot = join(runtimeDirectory, "pi-usage");
+  const applicationRoot = join(runtimeDirectory, "pi-subscription-usage");
   await mkdir(applicationRoot, { mode: 0o700 }).catch(
     (error: NodeJS.ErrnoException) => {
       if (error.code !== "EEXIST") throw error;

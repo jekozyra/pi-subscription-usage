@@ -168,7 +168,7 @@ test("session start adapts Pi authentication and quota presentation", async () =
     { accessToken: accessTokenFor("account-1"), accountId: "account-1" },
   ]);
   assert.deepEqual(f.statuses.at(-1), {
-    key: "pi-usage",
+    key: "pi-subscription-usage",
     text: "Claude  session 42% · resets 8m      week 80% · resets 16m\nCodex   week 63% · resets 16m      limit resets available: 2",
   });
   await f.emit("session_shutdown");
@@ -179,7 +179,7 @@ test("missing Codex authentication remains unavailable without delaying Claude",
   f.setAuthEnabled(false);
   await f.emit("session_start");
   assert.deepEqual(f.statuses.at(-1), {
-    key: "pi-usage",
+    key: "pi-subscription-usage",
     text: "Claude  session 42% · resets 8m      week 80% · resets 16m\nCodex   unavailable",
   });
   assert.equal(f.observedCredentials.length, 0);
