@@ -696,13 +696,15 @@ export function createFileProviderAcquisitionCoordinator(
                 attempt.kind === "temporary" || attempt.kind === "malformed"
                   ? (providerRetryAtMs ??
                     completedAtMs +
-                      Math.min(
-                        MAX_BACKOFF_MS,
-                        Math.max(
-                          INITIAL_BACKOFF_MS,
-                          INITIAL_BACKOFF_MS *
-                            2 ** (failures - 1) *
-                            (0.5 + random()),
+                      Math.ceil(
+                        Math.min(
+                          MAX_BACKOFF_MS,
+                          Math.max(
+                            INITIAL_BACKOFF_MS,
+                            INITIAL_BACKOFF_MS *
+                              2 ** (failures - 1) *
+                              (0.5 + random()),
+                          ),
                         ),
                       ))
                   : completedAtMs + TERMINAL_SUPPRESSION_MS;

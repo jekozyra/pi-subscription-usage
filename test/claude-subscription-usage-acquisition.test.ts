@@ -163,6 +163,27 @@ it.effect("decodes the five-hour session window", () =>
   }),
 );
 
+it.effect("omits an expired optional session window", () =>
+  Effect.gen(function* () {
+    const usage = yield* acquire(
+      async () =>
+        new Response(
+          JSON.stringify({
+            ...goodBody,
+            five_hour: {
+              utilization: 42.4,
+              resets_at: "1969-12-31T23:59:59Z",
+            },
+          }),
+        ),
+    );
+
+    assert.equal(usage.usedPercent, 63.4);
+    assert.equal(usage.sessionUsedPercent, undefined);
+    assert.equal(usage.sessionResetsAtMs, undefined);
+  }),
+);
+
 it.effect("rejects malformed required weekly data without clamping", () =>
   Effect.gen(function* () {
     for (const seven_day of [

@@ -550,6 +550,42 @@ describe("provider acquisition coordination", () => {
     });
   });
 
+  test("shares randomized backoff with fractional jitter across processes", async () => {
+    const root = await runtimeRoot();
+    const now = 1_000;
+    let acquisitions = 0;
+    const dependencies = {
+      runtimeDirectory: root,
+      now: () => now,
+      random: () => 0.9345,
+    };
+    const attempt = request(
+      Effect.sync(() => {
+        acquisitions += 1;
+        return { kind: "malformed" as const };
+      }),
+    );
+
+    const first = await Effect.runPromise(
+      createFileProviderAcquisitionCoordinator(dependencies).coordinate(
+        attempt,
+      ),
+    );
+    const second = await Effect.runPromise(
+      createFileProviderAcquisitionCoordinator(dependencies).coordinate(
+        attempt,
+      ),
+    );
+
+    assert.equal(acquisitions, 1);
+    assert.deepEqual(first, {
+      kind: "deferred",
+      reason: "malformed",
+      retryAtMs: 2_435,
+    });
+    assert.deepEqual(second, first);
+  });
+
   test("removes superseded state generations", async () => {
     const root = await runtimeRoot();
     let now = 1_000_000;

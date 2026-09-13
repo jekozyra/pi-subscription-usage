@@ -303,16 +303,15 @@ export function createAcquireClaudeSubscriptionUsage(
       const resetsAtMs = body.seven_day.resets_at.getTime();
       const sessionResetsAtMs = body.five_hour?.resets_at.getTime();
       const now = yield* Clock.currentTimeMillis;
-      if (
-        resetsAtMs <= now ||
-        (sessionResetsAtMs !== undefined && sessionResetsAtMs <= now)
-      ) {
+      if (resetsAtMs <= now) {
         return yield* new MalformedClaudeSubscriptionUsage();
       }
       return {
         usedPercent: body.seven_day.utilization,
         resetsAtMs,
-        ...(body.five_hour == null
+        ...(body.five_hour == null ||
+        sessionResetsAtMs === undefined ||
+        sessionResetsAtMs <= now
           ? {}
           : {
               sessionUsedPercent: body.five_hour.utilization,

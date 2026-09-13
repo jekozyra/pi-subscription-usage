@@ -4,6 +4,11 @@ All notable changes to this project are documented here. Releases follow [Semant
 
 ## [Unreleased]
 
+### Fixed
+
+- Prevented fractional retry deadlines from invalidating shared backoff and amplifying Claude requests across Pi processes
+- Preserved valid Claude weekly usage when an optional five-hour window has already expired
+
 ## [0.1.0] - 2026-09-13
 
 ### Added
