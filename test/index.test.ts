@@ -65,6 +65,7 @@ test("custom footer preserves statuses from other extensions", async () => {
             "Claude  unavailable\nCodex   week 10% · resets 5d16h",
           ],
           ["typesafe-router", "router auto · context 42%"],
+          ["pi-background-tasks", "◇ Agents: 2 done"],
         ]),
     },
   );
@@ -72,6 +73,7 @@ test("custom footer preserves statuses from other extensions", async () => {
   assert.deepEqual(footer.render(120).slice(1), [
     "Claude  unavailable",
     "Codex   week 10% · resets 5d16h",
+    "◇ Agents: 2 done",
     "router auto · context 42%",
   ]);
 });

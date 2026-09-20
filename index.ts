@@ -71,18 +71,15 @@ function installSubscriptionFooter(ctx: ExtensionContext): void {
           theme.fg("dim", "Claude  loading…"),
           theme.fg("dim", "Codex   loading…"),
         ];
-        const otherStatusLine = Array.from(extensionStatuses.entries())
+        const otherStatusLines = Array.from(extensionStatuses.entries())
           .filter(([key]) => key !== STATUS_KEY)
           .sort(([left], [right]) => left.localeCompare(right))
           .map(([, text]) => sanitizeStatusText(text))
-          .filter((text) => text !== "")
-          .join(" ");
+          .filter((text) => text !== "");
         return [
           heading,
           ...usageLines.map((line) => truncateToWidth(line, width, "")),
-          ...(otherStatusLine === ""
-            ? []
-            : [truncateToWidth(otherStatusLine, width, "")]),
+          ...otherStatusLines.map((line) => truncateToWidth(line, width, "")),
         ];
       },
     };
