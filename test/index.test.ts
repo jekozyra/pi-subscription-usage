@@ -25,6 +25,57 @@ test("package entry point registers the Codex quota lifecycle", () => {
   ]);
 });
 
+test("custom footer preserves statuses from other extensions", async () => {
+  type Handler = (event: unknown, context: unknown) => void | Promise<void>;
+  const handlers = new Map<string, Handler[]>();
+  const pi = {
+    on: (event: string, handler: Handler) => {
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    },
+  } as unknown as ExtensionAPI;
+  let footerFactory:
+    | ((...args: unknown[]) => { render: (width: number) => string[] })
+    | undefined;
+  const ctx = {
+    mode: "tui",
+    cwd: "/workspace",
+    model: { provider: "openai-codex", id: "gpt-5.6-sol" },
+    thinkingLevel: "medium",
+    ui: {
+      setFooter: (factory: typeof footerFactory) => {
+        footerFactory = factory;
+      },
+    },
+  };
+  piUsage(pi);
+
+  const footerHandler = handlers.get("session_start")?.at(-1);
+  assert.ok(footerHandler);
+  await footerHandler({}, ctx);
+  assert.ok(footerFactory);
+  const footer = footerFactory(
+    { requestRender: () => undefined },
+    { fg: (_color: string, text: string) => text },
+    {
+      onBranchChange: () => () => undefined,
+      getExtensionStatuses: () =>
+        new Map([
+          [
+            "pi-subscription-usage",
+            "Claude  unavailable\nCodex   week 10% · resets 5d16h",
+          ],
+          ["typesafe-router", "router auto · context 42%"],
+        ]),
+    },
+  );
+
+  assert.deepEqual(footer.render(120).slice(1), [
+    "Claude  unavailable",
+    "Codex   week 10% · resets 5d16h",
+    "router auto · context 42%",
+  ]);
+});
+
 test("warns only once per process when secure coordination is unavailable", async () => {
   const warningSymbol = Symbol.for(
     "pi-subscription-usage/coordination-warning-shown",

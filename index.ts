@@ -12,6 +12,7 @@ import { createAcquireDedicatedWeeklyQuotaUsage } from "./src/dedicated-weekly-q
 import { createFileProviderAcquisitionCoordinator } from "./src/provider-acquisition-coordinator.ts";
 import { registerWeeklySubscriptionUsage } from "./src/register.ts";
 
+const STATUS_KEY = "pi-subscription-usage";
 const COORDINATION_WARNING_SHOWN = Symbol.for(
   "pi-subscription-usage/coordination-warning-shown",
 );
@@ -23,6 +24,13 @@ function showCoordinationWarningOnce(notify: () => void): void {
   if (processState[COORDINATION_WARNING_SHOWN] === true) return;
   processState[COORDINATION_WARNING_SHOWN] = true;
   notify();
+}
+
+function sanitizeStatusText(text: string): string {
+  return text
+    .replace(/[\r\n\t]/g, " ")
+    .replace(/ +/g, " ")
+    .trim();
 }
 
 function displayDirectory(cwd: string): string {
@@ -58,16 +66,23 @@ function installSubscriptionFooter(ctx: ExtensionContext): void {
           width,
           "",
         );
-        const usage = footerData
-          .getExtensionStatuses()
-          .get("pi-subscription-usage");
-        const usageLines = usage?.split("\n") ?? [
+        const extensionStatuses = footerData.getExtensionStatuses();
+        const usageLines = extensionStatuses.get(STATUS_KEY)?.split("\n") ?? [
           theme.fg("dim", "Claude  loading…"),
           theme.fg("dim", "Codex   loading…"),
         ];
+        const otherStatusLine = Array.from(extensionStatuses.entries())
+          .filter(([key]) => key !== STATUS_KEY)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([, text]) => sanitizeStatusText(text))
+          .filter((text) => text !== "")
+          .join(" ");
         return [
           heading,
           ...usageLines.map((line) => truncateToWidth(line, width, "")),
+          ...(otherStatusLine === ""
+            ? []
+            : [truncateToWidth(otherStatusLine, width, "")]),
         ];
       },
     };
