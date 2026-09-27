@@ -26,8 +26,8 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.11",
-    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@biomejs/biome": "^2.5.14",
+    "@earendil-works/pi-coding-agent": "^0.87.1",
     "@effect/vitest": "^0.30.0",
     "@types/node": "^22.19.0",
     "typescript": "^5.9.3",
