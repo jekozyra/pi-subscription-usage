@@ -1,6 +1,6 @@
 {
   "name": "pi-subscription-usage",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A Pi footer for live Codex and Claude subscription usage",
   "keywords": [
     "pi-package",

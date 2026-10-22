@@ -4,8 +4,11 @@ All notable changes to this project are documented here. Releases follow [Semant
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-22
+
 ### Fixed
 
+- Restored Claude usage when `XDG_RUNTIME_DIR` is unset but a private `/run/user/<uid>` exists
 - Prevented fractional retry deadlines from invalidating shared backoff and amplifying Claude requests across Pi processes
 - Preserved valid Claude weekly usage when an optional five-hour window has already expired
 - Preserved status output from other extensions when the custom subscription footer is active
