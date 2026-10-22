@@ -102,7 +102,7 @@ export default function piUsage(pi: ExtensionAPI): void {
         onCoordinationUnavailable: () =>
           showCoordinationWarningOnce(() =>
             ctx.ui.notify(
-              "Claude usage unavailable: secure Linux XDG_RUNTIME_DIR required",
+              "Claude usage unavailable: secure Linux runtime directory required",
               "warning",
             ),
           ),

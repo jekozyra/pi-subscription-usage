@@ -14,7 +14,7 @@
 | Codex authentication | Pi `openai-codex` OAuth login |
 | Claude authentication | Claude Code Pro or Max OAuth login |
 
-macOS and Windows are not currently supported because secure cross-process Claude coordination depends on a private Linux `XDG_RUNTIME_DIR`.
+macOS and Windows are not currently supported because secure cross-process Claude coordination depends on a private Linux runtime directory (`XDG_RUNTIME_DIR` or `/run/user/<uid>`).
 
 ## Getting help
 

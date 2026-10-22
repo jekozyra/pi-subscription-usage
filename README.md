@@ -69,7 +69,7 @@ Temporary failures use provider retry deadlines or bounded backoff. A failed Cla
 
 ### Platform limits
 
-Cross-process Claude acquisition currently requires Linux and a private, user-owned `XDG_RUNTIME_DIR`, normally `/run/user/<uid>` with mode `0700`. Without it, Claude displays `unavailable` and the TUI warns once per Pi process. macOS and Windows coordination are not supported yet.
+Cross-process Claude acquisition currently requires Linux and a private, user-owned runtime directory. When `XDG_RUNTIME_DIR` is unset, the extension tries `/run/user/<uid>`; whichever directory is used must exist and have private permissions (normally mode `0700`). If neither is available, Claude displays `unavailable` and the TUI warns once per Pi process. macOS and Windows coordination are not supported yet.
 
 The Codex ChatGPT endpoint, Claude OAuth usage endpoint, and `x-codex-*` headers are undocumented. None has a public compatibility guarantee.
 
