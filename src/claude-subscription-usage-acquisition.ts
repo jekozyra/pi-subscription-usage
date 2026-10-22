@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { Cause, Clock, Data, Effect, Schema } from "effect";
+import { Cause, Clock, Data, Effect, ParseResult, Schema } from "effect";
 import {
   readBoundedResponseBody,
   withFinalizedResponseBody,
@@ -31,6 +31,8 @@ export interface ClaudeAuthentication {
   readonly auth: {
     readonly apiKey?: string;
   };
+  /** Stable account identity that outlives OAuth token refresh. */
+  readonly accountId?: string;
 }
 
 export type ResolveClaudeAuthentication = Effect.Effect<
@@ -51,8 +53,10 @@ export class ClaudeAuthenticationUnavailable extends Data.TaggedError(
 ) {}
 export class ClaudeAuthenticationRejected extends Data.TaggedError(
   "ClaudeAuthenticationRejected",
-)<{ readonly retryAtMs?: number }> {
-  constructor(options: { readonly retryAtMs?: number } = {}) {
+)<{ readonly retryAtMs?: number; readonly diagnostic?: string }> {
+  constructor(
+    options: { readonly retryAtMs?: number; readonly diagnostic?: string } = {},
+  ) {
     super(options);
   }
 }
@@ -64,11 +68,14 @@ export class TemporaryClaudeSubscriptionUsageFailure extends Data.TaggedError(
     readonly observedAtMs: number;
   };
   readonly preserveUsage?: boolean;
+  readonly diagnostic?: string;
 }> {}
 export class PermanentClaudeSubscriptionUsageFailure extends Data.TaggedError(
   "PermanentClaudeSubscriptionUsageFailure",
-)<{ readonly retryAtMs?: number }> {
-  constructor(options: { readonly retryAtMs?: number } = {}) {
+)<{ readonly retryAtMs?: number; readonly diagnostic?: string }> {
+  constructor(
+    options: { readonly retryAtMs?: number; readonly diagnostic?: string } = {},
+  ) {
     super(options);
   }
 }
@@ -79,6 +86,7 @@ export class MalformedClaudeSubscriptionUsage extends Data.TaggedError(
   readonly staleUsage?: AcquiredClaudeSubscriptionUsage & {
     readonly observedAtMs: number;
   };
+  readonly diagnostic?: string;
 }> {
   constructor(
     options: {
@@ -86,6 +94,7 @@ export class MalformedClaudeSubscriptionUsage extends Data.TaggedError(
       readonly staleUsage?: AcquiredClaudeSubscriptionUsage & {
         readonly observedAtMs: number;
       };
+      readonly diagnostic?: string;
     } = {},
   ) {
     super(options);
@@ -109,6 +118,12 @@ export interface ClaudeSubscriptionUsageAcquisitionDependencies {
   readonly resolveAuthentication: ResolveClaudeAuthentication;
   readonly acquisitionCoordinator: ProviderAcquisitionCoordinator;
   readonly onCoordinationUnavailable?: (reason: string) => void;
+}
+
+interface ResolvedCredential {
+  readonly key: string;
+  readonly account: string | undefined;
+  readonly fingerprint: string;
 }
 
 interface SharedClaudeSubscriptionUsage {
@@ -164,17 +179,21 @@ const IsoInstant = Schema.String.pipe(
   Schema.compose(Schema.Date),
 );
 
+const Utilization = Schema.Number.pipe(Schema.between(0, 100));
+
+// Claude Code treats both session fields as nullable: an idle window reports
+// no reset. A null utilization is unknown usage, never zero.
 const ClaudeUsageBody = Schema.Struct({
   five_hour: Schema.optional(
     Schema.NullOr(
       Schema.Struct({
-        utilization: Schema.Number.pipe(Schema.between(0, 100)),
-        resets_at: IsoInstant,
+        utilization: Schema.NullOr(Utilization),
+        resets_at: Schema.NullOr(IsoInstant),
       }),
     ),
   ),
   seven_day: Schema.Struct({
-    utilization: Schema.Number.pipe(Schema.between(0, 100)),
+    utilization: Utilization,
     resets_at: IsoInstant,
   }),
 });
@@ -187,16 +206,64 @@ function oauthKey(
   return key === undefined || key === "" ? undefined : key;
 }
 
-function fingerprintOAuthKey(key: string): string {
-  return createHash("sha256").update(key).digest("hex");
+function accountId(
+  authentication: ClaudeAuthentication | undefined,
+): string | undefined {
+  const id = authentication?.accountId?.trim();
+  return id === undefined || id === "" ? undefined : id;
 }
 
-/** Returns only a non-reversible, session-memory-safe identity for eligible OAuth. */
+function fingerprint(key: string, account: string | undefined): string {
+  return createHash("sha256")
+    .update(account === undefined ? key : `account\0${account}`)
+    .digest("hex");
+}
+
+/**
+ * Returns only a non-reversible, session-memory-safe identity for eligible
+ * OAuth. It follows the account when known, so token refresh keeps usage.
+ */
 export function claudeCredentialFingerprint(
   authentication: ClaudeAuthentication | undefined,
 ): string | undefined {
   const key = oauthKey(authentication);
-  return key === undefined ? undefined : fingerprintOAuthKey(key);
+  return key === undefined
+    ? undefined
+    : fingerprint(key, accountId(authentication));
+}
+
+function requestFailureDiagnostic(error: unknown): string {
+  const cause = error instanceof Error ? error.cause : undefined;
+  const code =
+    typeof cause === "object" && cause !== null
+      ? Reflect.get(cause, "code")
+      : undefined;
+  return typeof code === "string"
+    ? `request failed: ${code}`
+    : "request failed";
+}
+
+function describeActual(actual: string): string {
+  if (/^(null|true|false|-?\d[\d.eE+-]*)$/.test(actual)) return actual;
+  return actual.startsWith("{")
+    ? "object"
+    : actual.startsWith("[")
+      ? "array"
+      : actual.startsWith('"')
+        ? "string"
+        : "value";
+}
+
+/** Names the first contract violation; only scalar response values survive. */
+function decodeDiagnostic(error: ParseResult.ParseError): string {
+  const issue = ParseResult.ArrayFormatter.formatErrorSync(error)[0];
+  if (issue === undefined)
+    return "response body did not match the usage contract";
+  const message = issue.message.replace(
+    /, actual ([\s\S]*)$/,
+    (_, actual: string) => `, actual ${describeActual(actual)}`,
+  );
+  return `${issue.path.join(".") || "body"}: ${message}`;
 }
 
 function retryAtMs(response: Response, now: number): number | undefined {
@@ -228,8 +295,11 @@ function requestUsage(
         redirect: "manual",
         signal,
       }),
-    catch: () =>
-      new TemporaryClaudeSubscriptionUsageFailure({ retryAtMs: undefined }),
+    catch: (error) =>
+      new TemporaryClaudeSubscriptionUsageFailure({
+        retryAtMs: undefined,
+        diagnostic: requestFailureDiagnostic(error),
+      }),
   });
 }
 
@@ -237,8 +307,12 @@ function classifyResponse(
   response: Response,
 ): Effect.Effect<Response, ClaudeSubscriptionUsageAcquisitionError> {
   if (response.ok) return Effect.succeed(response);
+  const retryAfter = response.headers.get("retry-after");
+  const diagnostic = `HTTP ${response.status}${
+    retryAfter === null ? "" : ` retry-after ${retryAfter.slice(0, 40)}`
+  }`;
   if (response.status === 401 || response.status === 403) {
-    return Effect.fail(new ClaudeAuthenticationRejected());
+    return Effect.fail(new ClaudeAuthenticationRejected({ diagnostic }));
   }
   if (
     response.status === 408 ||
@@ -257,26 +331,35 @@ function classifyResponse(
                     retryAtMs(response, now) ?? 0,
                   )
                 : retryAtMs(response, now),
+            diagnostic,
           }),
         ),
       ),
     );
   }
-  return Effect.fail(new PermanentClaudeSubscriptionUsageFailure());
+  return Effect.fail(
+    new PermanentClaudeSubscriptionUsageFailure({ diagnostic }),
+  );
 }
 
 export function createAcquireClaudeSubscriptionUsage(
   dependencies: ClaudeSubscriptionUsageAcquisitionDependencies,
 ): AcquireClaudeSubscriptionUsage {
-  const resolveKey = dependencies.resolveAuthentication.pipe(
+  const resolveCredential = dependencies.resolveAuthentication.pipe(
     Effect.catchAllCause(() =>
       Effect.fail(new ClaudeAuthenticationUnavailable()),
     ),
     Effect.flatMap((authentication) => {
       const key = oauthKey(authentication);
-      return key === undefined
-        ? Effect.fail(new ClaudeAuthenticationUnavailable())
-        : Effect.succeed(key);
+      if (key === undefined) {
+        return Effect.fail(new ClaudeAuthenticationUnavailable());
+      }
+      const account = accountId(authentication);
+      return Effect.succeed({
+        key,
+        account,
+        fingerprint: fingerprint(key, account),
+      });
     }),
   );
 
@@ -285,57 +368,70 @@ export function createAcquireClaudeSubscriptionUsage(
       const text = yield* readBoundedResponseBody(
         response,
         MAX_RESPONSE_BYTES,
-        () => new MalformedClaudeSubscriptionUsage(),
+        () =>
+          new MalformedClaudeSubscriptionUsage({
+            diagnostic: `response body exceeded ${MAX_RESPONSE_BYTES} bytes`,
+          }),
         () =>
           new TemporaryClaudeSubscriptionUsageFailure({
             retryAtMs: undefined,
+            diagnostic: "response body read failed",
           }),
       );
       let unknownBody: unknown;
       try {
         unknownBody = JSON.parse(text) as unknown;
       } catch {
-        return yield* new MalformedClaudeSubscriptionUsage();
+        return yield* new MalformedClaudeSubscriptionUsage({
+          diagnostic: "response body is not JSON",
+        });
       }
       const body = yield* Schema.decodeUnknown(ClaudeUsageBody)(
         unknownBody,
-      ).pipe(Effect.mapError(() => new MalformedClaudeSubscriptionUsage()));
+      ).pipe(
+        Effect.mapError(
+          (error) =>
+            new MalformedClaudeSubscriptionUsage({
+              diagnostic: decodeDiagnostic(error),
+            }),
+        ),
+      );
       const resetsAtMs = body.seven_day.resets_at.getTime();
-      const sessionResetsAtMs = body.five_hour?.resets_at.getTime();
+      const sessionResetsAtMs = body.five_hour?.resets_at?.getTime();
       const now = yield* Clock.currentTimeMillis;
       if (resetsAtMs <= now) {
-        return yield* new MalformedClaudeSubscriptionUsage();
+        return yield* new MalformedClaudeSubscriptionUsage({
+          diagnostic: "seven_day.resets_at is not in the future",
+        });
       }
       return {
         usedPercent: body.seven_day.utilization,
         resetsAtMs,
         ...(body.five_hour == null ||
-        sessionResetsAtMs === undefined ||
-        sessionResetsAtMs <= now
+        body.five_hour.utilization === null ||
+        (sessionResetsAtMs !== undefined && sessionResetsAtMs <= now)
           ? {}
           : {
               sessionUsedPercent: body.five_hour.utilization,
-              sessionResetsAtMs,
+              ...(sessionResetsAtMs === undefined ? {} : { sessionResetsAtMs }),
             }),
       };
     });
 
-  const exchange = (key: string) =>
+  const exchange = (key: string, credentialFingerprint: string) =>
     requestUsage(dependencies.fetch, key).pipe(
       Effect.flatMap((response) =>
         withFinalizedResponseBody(response, (response) =>
           classifyResponse(response).pipe(Effect.flatMap(decodeUsage)),
         ),
       ),
-      Effect.map((usage) => ({
-        ...usage,
-        credentialFingerprint: fingerprintOAuthKey(key),
-      })),
+      Effect.map((usage) => ({ ...usage, credentialFingerprint })),
       Effect.timeoutFail({
         duration: REQUEST_TIMEOUT_MS,
         onTimeout: () =>
           new TemporaryClaudeSubscriptionUsageFailure({
             retryAtMs: undefined,
+            diagnostic: "request timed out",
           }),
       }),
     );
@@ -362,28 +458,33 @@ export function createAcquireClaudeSubscriptionUsage(
           Number.isFinite(sessionUsedPercent) &&
           sessionUsedPercent >= 0 &&
           sessionUsedPercent <= 100 &&
-          Number.isSafeInteger(sessionResetsAtMs) &&
-          sessionResetsAtMs > 0 &&
-          sessionResetsAtMs <= 8_640_000_000_000_000))
+          (sessionResetsAtMs === undefined ||
+            (Number.isSafeInteger(sessionResetsAtMs) &&
+              sessionResetsAtMs > 0 &&
+              sessionResetsAtMs <= 8_640_000_000_000_000))))
       ? {
           usedPercent,
           resetsAtMs,
-          ...(sessionUsedPercent === undefined
-            ? {}
-            : { sessionUsedPercent, sessionResetsAtMs }),
+          ...(sessionUsedPercent === undefined ? {} : { sessionUsedPercent }),
+          ...(sessionResetsAtMs === undefined ? {} : { sessionResetsAtMs }),
         }
       : undefined;
   };
 
-  const coordinateExchange = (key: string) =>
+  const coordinateExchange = (credential: ResolvedCredential) =>
     coordinator
       .coordinate<SharedClaudeSubscriptionUsage>({
         provider: "claude-subscription-usage",
-        credential: key,
+        credential: credential.key,
+        ...(credential.account === undefined
+          ? {}
+          : { account: credential.account }),
         decode: decodeSharedUsage,
         reusableUntilMs: (usage, observedAtMs) =>
           Math.min(observedAtMs + 3 * 60_000, usage.resetsAtMs),
-        acquire: Effect.exit(exchange(key)).pipe(
+        acquire: Effect.exit(
+          exchange(credential.key, credential.fingerprint),
+        ).pipe(
           Effect.flatMap((exit) => {
             if (exit._tag === "Success") {
               return Effect.succeed<
@@ -393,35 +494,49 @@ export function createAcquireClaudeSubscriptionUsage(
                 value: {
                   usedPercent: exit.value.usedPercent,
                   resetsAtMs: exit.value.resetsAtMs,
-                  ...(exit.value.sessionUsedPercent === undefined ||
-                  exit.value.sessionResetsAtMs === undefined
+                  ...(exit.value.sessionUsedPercent === undefined
                     ? {}
-                    : {
-                        sessionUsedPercent: exit.value.sessionUsedPercent,
-                        sessionResetsAtMs: exit.value.sessionResetsAtMs,
-                      }),
+                    : { sessionUsedPercent: exit.value.sessionUsedPercent }),
+                  ...(exit.value.sessionResetsAtMs === undefined
+                    ? {}
+                    : { sessionResetsAtMs: exit.value.sessionResetsAtMs }),
                 },
               });
             }
             const failure = Cause.failureOption(exit.cause);
             if (failure._tag === "Some") {
-              switch (failure.value._tag) {
+              const error = failure.value;
+              const diagnostic =
+                error._tag === "ClaudeAuthenticationUnavailable"
+                  ? { diagnostic: "OAuth credential unavailable" }
+                  : error.diagnostic === undefined
+                    ? {}
+                    : { diagnostic: error.diagnostic };
+              switch (error._tag) {
                 case "TemporaryClaudeSubscriptionUsageFailure":
                   return Effect.succeed({
                     kind: "temporary" as const,
-                    ...(failure.value.retryAtMs === undefined
+                    ...(error.retryAtMs === undefined
                       ? {}
-                      : { retryAtMs: failure.value.retryAtMs }),
+                      : { retryAtMs: error.retryAtMs }),
+                    ...diagnostic,
                   });
                 case "MalformedClaudeSubscriptionUsage":
-                  return Effect.succeed({ kind: "malformed" as const });
+                  return Effect.succeed({
+                    kind: "malformed" as const,
+                    ...diagnostic,
+                  });
                 case "ClaudeAuthenticationUnavailable":
                 case "ClaudeAuthenticationRejected":
                   return Effect.succeed({
                     kind: "credential-rejected" as const,
+                    ...diagnostic,
                   });
                 case "PermanentClaudeSubscriptionUsageFailure":
-                  return Effect.succeed({ kind: "terminal" as const });
+                  return Effect.succeed({
+                    kind: "terminal" as const,
+                    ...diagnostic,
+                  });
               }
             }
             const defects = Cause.keepDefects(exit.cause);
@@ -442,7 +557,7 @@ export function createAcquireClaudeSubscriptionUsage(
 
   const usageFromOutcome = (
     outcome: CoordinatedAcquisitionOutcome<SharedClaudeSubscriptionUsage>,
-    key: string,
+    credentialFingerprint: string,
   ): Effect.Effect<
     AcquiredClaudeSubscriptionUsage,
     ClaudeSubscriptionUsageAcquisitionError
@@ -456,7 +571,7 @@ export function createAcquireClaudeSubscriptionUsage(
         return Effect.succeed({
           ...outcome.value,
           observedAtMs: outcome.observedAtMs,
-          credentialFingerprint: fingerprintOAuthKey(key),
+          credentialFingerprint,
         });
       }
       const staleUsage =
@@ -465,7 +580,7 @@ export function createAcquireClaudeSubscriptionUsage(
           : {
               ...outcome.stale.value,
               observedAtMs: outcome.stale.observedAtMs,
-              credentialFingerprint: fingerprintOAuthKey(key),
+              credentialFingerprint,
             };
       switch (outcome.reason) {
         case "temporary":
@@ -501,16 +616,16 @@ export function createAcquireClaudeSubscriptionUsage(
 
   return () =>
     Effect.gen(function* () {
-      const key = yield* resolveKey;
-      let outcome = yield* coordinateExchange(key);
+      const credential = yield* resolveCredential;
+      let outcome = yield* coordinateExchange(credential);
       if (
         outcome.kind === "deferred" &&
         outcome.reason === "credential-rejected"
       ) {
-        const refreshedKey = yield* resolveKey;
-        outcome = yield* coordinateExchange(refreshedKey);
-        return yield* usageFromOutcome(outcome, refreshedKey);
+        const refreshed = yield* resolveCredential;
+        outcome = yield* coordinateExchange(refreshed);
+        return yield* usageFromOutcome(outcome, refreshed.fingerprint);
       }
-      return yield* usageFromOutcome(outcome, key);
+      return yield* usageFromOutcome(outcome, credential.fingerprint);
     });
 }

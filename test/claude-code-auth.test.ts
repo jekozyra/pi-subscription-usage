@@ -1,4 +1,11 @@
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -40,15 +47,20 @@ async function makeConfigDirectory(): Promise<string> {
 }
 
 async function writeClaudeCredentials(
-  options: { mode?: number; expiresAt?: number } = {},
+  options: {
+    mode?: number;
+    expiresAt?: number;
+    accessToken?: string;
+    directory?: string;
+  } = {},
 ): Promise<string> {
-  const directory = await makeConfigDirectory();
+  const directory = options.directory ?? (await makeConfigDirectory());
   const credentialsPath = join(directory, ".credentials.json");
   await writeFile(
     credentialsPath,
     JSON.stringify({
       claudeAiOauth: {
-        accessToken: "claude-code-token",
+        accessToken: options.accessToken ?? "claude-code-token",
         expiresAt: options.expiresAt ?? Date.now() + 60_000,
       },
     }),
@@ -57,7 +69,92 @@ async function writeClaudeCredentials(
   return credentialsPath;
 }
 
+async function writeClaudeAccount(
+  directory: string,
+  contents: unknown,
+  mode = 0o644,
+): Promise<void> {
+  await writeFile(
+    join(directory, ".claude.json"),
+    typeof contents === "string" ? contents : JSON.stringify(contents),
+    { mode },
+  );
+}
+
 describe("resolveClaudeSubscriptionAuthentication", () => {
+  it("attributes Claude Code OAuth to its signed-in account", async () => {
+    const credentialsPath = await writeClaudeCredentials({
+      accessToken: "account-token-1",
+    });
+    const directory = join(credentialsPath, "..");
+    await writeClaudeAccount(directory, {
+      oauthAccount: {
+        accountUuid: "account-a",
+        organizationUuid: "organization-a",
+      },
+    });
+
+    expect(
+      await resolveClaudeSubscriptionAuthentication(
+        contextWithAuthentication(),
+      ),
+    ).toEqual({
+      source: "OAuth",
+      auth: { apiKey: "account-token-1" },
+      accountId: "account-a/organization-a",
+    });
+  });
+
+  it("keeps a token's account when the config later becomes unreadable", async () => {
+    const credentialsPath = await writeClaudeCredentials({
+      accessToken: "account-token-2",
+    });
+    const directory = join(credentialsPath, "..");
+    await writeClaudeAccount(directory, {
+      oauthAccount: { accountUuid: "account-b" },
+    });
+    await resolveClaudeSubscriptionAuthentication(contextWithAuthentication());
+
+    await writeClaudeAccount(directory, '{"oauthAccount":');
+    const sameToken = await resolveClaudeSubscriptionAuthentication(
+      contextWithAuthentication(),
+    );
+    await writeClaudeCredentials({
+      accessToken: "account-token-3",
+      directory,
+    });
+    const refreshedToken = await resolveClaudeSubscriptionAuthentication(
+      contextWithAuthentication(),
+    );
+
+    expect(sameToken?.accountId).toBe("account-b/");
+    expect(refreshedToken).toEqual({
+      source: "OAuth",
+      auth: { apiKey: "account-token-3" },
+    });
+  });
+
+  it("ignores an account config that others can write", async () => {
+    const credentialsPath = await writeClaudeCredentials({
+      accessToken: "account-token-4",
+    });
+    const directory = join(credentialsPath, "..");
+    await writeClaudeAccount(
+      directory,
+      { oauthAccount: { accountUuid: "account-c" } },
+      0o666,
+    );
+    await chmod(join(directory, ".claude.json"), 0o666);
+
+    expect(
+      (
+        await resolveClaudeSubscriptionAuthentication(
+          contextWithAuthentication(),
+        )
+      )?.accountId,
+    ).toBeUndefined();
+  });
+
   it("prefers Claude Code OAuth when its provider is installed", async () => {
     await writeClaudeCredentials();
 

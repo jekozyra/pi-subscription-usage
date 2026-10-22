@@ -84,6 +84,35 @@ it.effect(
     }),
 );
 
+it.effect("shares an idle session window without a reset instant", () =>
+  Effect.gen(function* () {
+    const resetsAtMs = Date.parse("2026-09-18T12:34:56.789Z");
+    const usage = yield* createAcquireClaudeSubscriptionUsage({
+      fetch: async () => new Response(JSON.stringify(goodBody)),
+      resolveAuthentication: oauth(),
+      acquisitionCoordinator: {
+        coordinate: (request) => {
+          const value = request.decode({
+            usedPercent: 27,
+            resetsAtMs,
+            sessionUsedPercent: 0,
+          });
+          return value === undefined
+            ? Effect.die("test fixture failed to decode")
+            : Effect.succeed({
+                kind: "success" as const,
+                value,
+                observedAtMs: 1_000,
+              });
+        },
+      },
+    })();
+
+    assert.equal(usage.sessionUsedPercent, 0);
+    assert.equal(usage.sessionResetsAtMs, undefined);
+  }),
+);
+
 it.effect(
   "carries a coordinated preceding observation through shared backoff",
   () =>
@@ -184,11 +213,35 @@ it.effect("omits an expired optional session window", () =>
   }),
 );
 
+it.effect("keeps an idle session window with no reset instant", () =>
+  Effect.gen(function* () {
+    for (const [five_hour, sessionUsedPercent] of [
+      [{ utilization: 0, resets_at: null }, 0],
+      [{ utilization: 12.5, resets_at: null }, 12.5],
+      [{ utilization: null, resets_at: null }, undefined],
+      [{ utilization: null, resets_at: "2026-09-13T19:30:00Z" }, undefined],
+    ] as const) {
+      const usage = yield* acquire(
+        async () => new Response(JSON.stringify({ ...goodBody, five_hour })),
+      );
+      assert.equal(usage.usedPercent, 63.4, JSON.stringify(five_hour));
+      assert.equal(
+        usage.sessionUsedPercent,
+        sessionUsedPercent,
+        JSON.stringify(five_hour),
+      );
+      assert.equal(usage.sessionResetsAtMs, undefined);
+    }
+  }),
+);
+
 it.effect("rejects malformed required weekly data without clamping", () =>
   Effect.gen(function* () {
     for (const seven_day of [
       undefined,
       null,
+      { utilization: 50, resets_at: null },
+      { utilization: null, resets_at: "2026-09-18T12:34:56Z" },
       { utilization: -1, resets_at: "2026-09-18T12:34:56Z" },
       { utilization: 101, resets_at: "2026-09-18T12:34:56Z" },
       { utilization: 50, resets_at: "not-an-instant" },
@@ -734,5 +787,135 @@ it.effect("bounds declared and streamed response bodies at 64 KiB", () =>
     );
     assert.equal(failureTag(streamed), "MalformedClaudeSubscriptionUsage");
     assert.equal(cancelled, true);
+  }),
+);
+
+function recordedDiagnostic(fetch: typeof globalThis.fetch) {
+  return Effect.gen(function* () {
+    let diagnostic: string | undefined;
+    yield* Effect.exit(
+      createAcquireClaudeSubscriptionUsage({
+        fetch,
+        resolveAuthentication: oauth(),
+        acquisitionCoordinator: {
+          coordinate: (request) =>
+            request.acquire.pipe(
+              Effect.map((attempt) => {
+                if (attempt.kind !== "success") diagnostic = attempt.diagnostic;
+                return {
+                  kind: "deferred" as const,
+                  reason: "terminal" as const,
+                  retryAtMs: 0,
+                };
+              }),
+            ),
+        },
+      })(),
+    );
+    return diagnostic;
+  });
+}
+
+it.effect("records why an acquisition failed without the credential", () =>
+  Effect.gen(function* () {
+    const cases: Array<[typeof globalThis.fetch, string]> = [
+      [
+        async () =>
+          new Response("{}", {
+            status: 429,
+            headers: { "retry-after": "0" },
+          }),
+        "HTTP 429 retry-after 0",
+      ],
+      [async () => new Response("", { status: 401 }), "HTTP 401"],
+      [
+        async () => new Response("{", { status: 200 }),
+        "response body is not JSON",
+      ],
+      [
+        async () =>
+          new Response(
+            JSON.stringify({ ...goodBody, five_hour: { resets_at: null } }),
+          ),
+        "five_hour.utilization: is missing",
+      ],
+      [
+        async () =>
+          new Response(
+            JSON.stringify({
+              seven_day: { ...goodBody.seven_day, utilization: 101 },
+            }),
+          ),
+        "seven_day.utilization: Expected a number between 0 and 100, actual 101",
+      ],
+      [
+        async () =>
+          new Response(
+            JSON.stringify({
+              seven_day: { ...goodBody.seven_day, utilization: "private" },
+            }),
+          ),
+        "seven_day.utilization: Expected number, actual string",
+      ],
+      [
+        async () => new Response(JSON.stringify({ seven_day: { secret: 1 } })),
+        "seven_day.utilization: is missing",
+      ],
+      [
+        async () => new Response(JSON.stringify({ seven_day: ["private"] })),
+        "seven_day: Expected { readonly utilization: between(0, 100); readonly resets_at: ({ string | filter } <-> Date) }, actual array",
+      ],
+      [
+        async () => {
+          throw new TypeError("fetch failed", {
+            cause: Object.assign(new Error("reset"), { code: "ECONNRESET" }),
+          });
+        },
+        "request failed: ECONNRESET",
+      ],
+    ];
+    for (const [fetch, expected] of cases) {
+      assert.equal(yield* recordedDiagnostic(fetch), expected);
+    }
+  }),
+);
+
+it.effect("identifies usage by account so token refresh keeps it", () =>
+  Effect.gen(function* () {
+    const usageFor = (apiKey: string, accountId?: string) =>
+      createAcquireClaudeSubscriptionUsage({
+        fetch: async () => new Response(JSON.stringify(goodBody)),
+        resolveAuthentication: Effect.succeed({
+          source: "OAuth",
+          auth: { apiKey },
+          ...(accountId === undefined ? {} : { accountId }),
+        }),
+        acquisitionCoordinator: immediateAcquisitionCoordinator,
+      })();
+
+    const first = yield* usageFor("token-1", "account-a");
+    const refreshed = yield* usageFor("token-2", "account-a");
+    const otherAccount = yield* usageFor("token-2", "account-b");
+
+    assert.equal(first.credentialFingerprint, refreshed.credentialFingerprint);
+    assert.notEqual(
+      refreshed.credentialFingerprint,
+      otherAccount.credentialFingerprint,
+    );
+    assert.equal(
+      first.credentialFingerprint,
+      claudeCredentialFingerprint({
+        source: "OAuth",
+        auth: { apiKey: "token-3" },
+        accountId: "account-a",
+      }),
+    );
+    assert.equal(
+      (yield* usageFor("token-1")).credentialFingerprint,
+      claudeCredentialFingerprint({
+        source: "OAuth",
+        auth: { apiKey: "token-1" },
+      }),
+    );
   }),
 );
