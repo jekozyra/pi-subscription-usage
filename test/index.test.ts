@@ -84,7 +84,7 @@ test("warns only once per process when secure coordination is unavailable", asyn
   );
   Reflect.deleteProperty(globalThis, warningSymbol);
   const previousRuntimeDirectory = process.env.XDG_RUNTIME_DIR;
-  delete process.env.XDG_RUNTIME_DIR;
+  process.env.XDG_RUNTIME_DIR = "/";
   const warnings: string[] = [];
 
   type Handler = (event: unknown, context: unknown) => Promise<void>;
@@ -135,6 +135,6 @@ test("warns only once per process when secure coordination is unavailable", asyn
   }
 
   assert.deepEqual(warnings, [
-    "Claude usage unavailable: secure Linux XDG_RUNTIME_DIR required",
+    "Claude usage unavailable: secure Linux runtime directory required",
   ]);
 });

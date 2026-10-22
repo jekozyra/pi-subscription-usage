@@ -184,7 +184,11 @@ async function initializeRuntime(
 ): Promise<Runtime> {
   if (process.platform !== "linux") throw new Error("Linux is required");
   const runtimeDirectory =
-    requestedRuntimeDirectory ?? process.env.XDG_RUNTIME_DIR;
+    requestedRuntimeDirectory ??
+    process.env.XDG_RUNTIME_DIR ??
+    (process.getuid === undefined
+      ? undefined
+      : `/run/user/${process.getuid()}`);
   if (runtimeDirectory === undefined || !isAbsolute(runtimeDirectory)) {
     throw new Error("a secure XDG_RUNTIME_DIR is required");
   }

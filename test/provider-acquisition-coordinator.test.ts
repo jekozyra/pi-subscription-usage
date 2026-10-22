@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -120,6 +121,43 @@ function runWorker(arguments_: readonly string[]): Promise<string> {
 }
 
 describe("provider acquisition coordination", () => {
+  test("uses the private /run/user/<uid> directory when XDG_RUNTIME_DIR is unset", async (context) => {
+    const uid = process.getuid?.();
+    const directory = `/run/user/${uid}`;
+    const info = await lstat(directory).catch(() => undefined);
+    if (
+      process.platform !== "linux" ||
+      uid === undefined ||
+      info?.uid !== uid ||
+      !info.isDirectory() ||
+      (info.mode & 0o077) !== 0
+    ) {
+      context.skip();
+      return;
+    }
+
+    const original = process.env.XDG_RUNTIME_DIR;
+    delete process.env.XDG_RUNTIME_DIR;
+    try {
+      const coordinator = createFileProviderAcquisitionCoordinator();
+      const outcome = await Effect.runPromise(
+        coordinator.coordinate({
+          ...request(
+            Effect.succeed({
+              kind: "success",
+              value: { usedPercent: 42, resetsAtMs: Date.now() + 3_600_000 },
+            }),
+          ),
+          credential: `fallback-test-${randomUUID()}`,
+        }),
+      );
+      assert.equal(outcome.kind, "success");
+    } finally {
+      if (original === undefined) delete process.env.XDG_RUNTIME_DIR;
+      else process.env.XDG_RUNTIME_DIR = original;
+    }
+  });
+
   test("concurrent processes reuse one successful acquisition", async () => {
     const root = await runtimeRoot();
     const first = createFileProviderAcquisitionCoordinator({
