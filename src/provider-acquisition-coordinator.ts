@@ -26,17 +26,26 @@ const HEARTBEAT_MS = 2_000;
 const FOLLOWER_WAIT_MS = 6_000;
 const ENTRY_RETENTION_MS = 24 * 60 * 60_000;
 const MAX_STATE_BYTES = 16 * 1024;
+const MAX_DIAGNOSTIC_LENGTH = 200;
 
 export class AcquisitionCoordinationUnavailable extends Data.TaggedError(
   "AcquisitionCoordinationUnavailable",
 )<{ readonly reason: string }> {}
 
+/** Non-secret failure detail, persisted so a stuck provider can be diagnosed. */
+interface AttemptDiagnostic {
+  readonly diagnostic?: string;
+}
+
 export type CoordinatedAcquisitionAttempt<A> =
   | { readonly kind: "success"; readonly value: A }
-  | { readonly kind: "temporary"; readonly retryAtMs?: number }
-  | { readonly kind: "malformed" }
-  | { readonly kind: "credential-rejected" }
-  | { readonly kind: "terminal" };
+  | ({
+      readonly kind: "temporary";
+      readonly retryAtMs?: number;
+    } & AttemptDiagnostic)
+  | ({ readonly kind: "malformed" } & AttemptDiagnostic)
+  | ({ readonly kind: "credential-rejected" } & AttemptDiagnostic)
+  | ({ readonly kind: "terminal" } & AttemptDiagnostic);
 
 export type CoordinatedAcquisitionOutcome<A> =
   | {
@@ -60,6 +69,11 @@ export interface CoordinatedAcquisitionRequest<A> {
   readonly provider: string;
   /** Used only in memory as HMAC input. */
   readonly credential: string;
+  /**
+   * Used only in memory as HMAC input. When present, credentials for the same
+   * account share one entry, so usage and backoff survive token refresh.
+   */
+  readonly account?: string;
   readonly decode: (value: unknown) => A | undefined;
   readonly reusableUntilMs: (value: A, observedAtMs: number) => number;
   readonly acquire: Effect.Effect<CoordinatedAcquisitionAttempt<A>>;
@@ -104,6 +118,9 @@ interface StoredState {
           | "credential-rejected"
           | "terminal";
         readonly retryAtMs: number;
+        readonly diagnostic?: string;
+        /** HMAC of the credential a credential-rejected outcome applies to. */
+        readonly rejectedCredential?: string;
       };
   readonly success?: StoredSuccess;
 }
@@ -240,11 +257,19 @@ function parseState(value: unknown): StoredState | undefined {
   } else if (kind === "deferred") {
     const reason = Reflect.get(outcome, "reason");
     const retryAtMs = Reflect.get(outcome, "retryAtMs");
+    const diagnostic = Reflect.get(outcome, "diagnostic");
+    const rejectedCredential = Reflect.get(outcome, "rejectedCredential");
     if (
       !["temporary", "malformed", "credential-rejected", "terminal"].includes(
         reason,
       ) ||
-      !Number.isSafeInteger(retryAtMs)
+      !Number.isSafeInteger(retryAtMs) ||
+      (diagnostic !== undefined &&
+        (typeof diagnostic !== "string" ||
+          diagnostic.length > MAX_DIAGNOSTIC_LENGTH)) ||
+      (rejectedCredential !== undefined &&
+        (typeof rejectedCredential !== "string" ||
+          !/^[0-9a-f]{64}$/.test(rejectedCredential)))
     )
       return undefined;
   } else if (kind !== "success") return undefined;
@@ -385,9 +410,19 @@ function priorSuccess<A>(
     : { value, observedAtMs: state.success.observedAtMs };
 }
 
+function sanitizeDiagnostic(diagnostic: string | undefined) {
+  if (diagnostic === undefined) return undefined;
+  const text = diagnostic
+    .replace(/\p{Cc}+/gu, " ")
+    .trim()
+    .slice(0, MAX_DIAGNOSTIC_LENGTH);
+  return text === "" ? undefined : text;
+}
+
 function reusableOutcome<A>(
   state: StoredState | undefined,
   request: CoordinatedAcquisitionRequest<A>,
+  credentialKey: string,
   now: number,
 ): CoordinatedAcquisitionOutcome<A> | undefined {
   const success = priorSuccess(state, request.decode);
@@ -396,7 +431,16 @@ function reusableOutcome<A>(
       return { kind: "success", ...success };
     }
   }
-  if (state?.outcome.kind === "deferred" && now < state.outcome.retryAtMs) {
+  if (
+    state?.outcome.kind === "deferred" &&
+    now < state.outcome.retryAtMs &&
+    // A refreshed credential is not bound by its predecessor's rejection.
+    !(
+      state.outcome.reason === "credential-rejected" &&
+      state.outcome.rejectedCredential !== undefined &&
+      state.outcome.rejectedCredential !== credentialKey
+    )
+  ) {
     return {
       kind: "deferred",
       reason: state.outcome.reason,
@@ -533,9 +577,15 @@ export function createFileProviderAcquisitionCoordinator(
       if (!/^[a-z0-9-]+$/.test(request.provider)) {
         return yield* coordinationUnavailable("invalid provider namespace");
       }
-      const key = createHmac("sha256", shared.secret)
+      const credentialKey = createHmac("sha256", shared.secret)
         .update(request.credential)
         .digest("hex");
+      const key =
+        request.account === undefined
+          ? credentialKey
+          : createHmac("sha256", shared.secret)
+              .update(`account\0${request.account}`)
+              .digest("hex");
       const entry = join(shared.entries, `${request.provider}-${key}`);
       yield* Effect.tryPromise({
         try: async () => {
@@ -555,7 +605,7 @@ export function createFileProviderAcquisitionCoordinator(
         try: () => readLatestState(entry, now(), request.decode),
         catch: coordinationUnavailable,
       });
-      const reusable = reusableOutcome(state, request, now());
+      const reusable = reusableOutcome(state, request, credentialKey, now());
       if (reusable !== undefined) return reusable;
 
       const token = randomUUID();
@@ -575,7 +625,12 @@ export function createFileProviderAcquisitionCoordinator(
             try: () => readLatestState(entry, now(), request.decode),
             catch: coordinationUnavailable,
           });
-          const followerOutcome = reusableOutcome(state, request, now());
+          const followerOutcome = reusableOutcome(
+            state,
+            request,
+            credentialKey,
+            now(),
+          );
           if (followerOutcome !== undefined) return followerOutcome;
         }
       }
@@ -584,7 +639,12 @@ export function createFileProviderAcquisitionCoordinator(
           try: () => readLatestState(entry, now(), request.decode),
           catch: coordinationUnavailable,
         });
-        const followerOutcome = reusableOutcome(state, request, now());
+        const followerOutcome = reusableOutcome(
+          state,
+          request,
+          credentialKey,
+          now(),
+        );
         if (followerOutcome !== undefined) return followerOutcome;
         const stale = priorSuccess(state, request.decode);
         return {
@@ -608,7 +668,12 @@ export function createFileProviderAcquisitionCoordinator(
               try: () => readLatestState(entry, now(), request.decode),
               catch: coordinationUnavailable,
             });
-            const ownerReusable = reusableOutcome(state, request, now());
+            const ownerReusable = reusableOutcome(
+              state,
+              request,
+              credentialKey,
+              now(),
+            );
             if (ownerReusable !== undefined) return ownerReusable;
             const generation = (state?.generation ?? 0) + 1;
             const success = state?.success;
@@ -660,7 +725,12 @@ export function createFileProviderAcquisitionCoordinator(
                 try: () => readLatestState(entry, now(), request.decode),
                 catch: coordinationUnavailable,
               });
-              const latestOutcome = reusableOutcome(latest, request, now());
+              const latestOutcome = reusableOutcome(
+                latest,
+                request,
+                credentialKey,
+                now(),
+              );
               if (latestOutcome !== undefined) return latestOutcome;
               const stale = priorSuccess(latest, request.decode);
               return {
@@ -690,14 +760,17 @@ export function createFileProviderAcquisitionCoordinator(
             } else {
               const failures = (state?.failures ?? 0) + 1;
               const reason = attempt.kind;
+              const diagnostic = sanitizeDiagnostic(attempt.diagnostic);
               const providerRetryAtMs =
                 attempt.kind === "temporary" &&
                 attempt.retryAtMs !== undefined &&
                 attempt.retryAtMs > completedAtMs
                   ? attempt.retryAtMs
                   : undefined;
+              // A malformed body will not fix itself within seconds, and
+              // retrying it quickly is what trips the provider rate limit.
               const retryAtMs =
-                attempt.kind === "temporary" || attempt.kind === "malformed"
+                attempt.kind === "temporary"
                   ? (providerRetryAtMs ??
                     completedAtMs +
                       Math.ceil(
@@ -717,7 +790,15 @@ export function createFileProviderAcquisitionCoordinator(
                 generation,
                 updatedAtMs: completedAtMs,
                 failures,
-                outcome: { kind: "deferred", reason, retryAtMs },
+                outcome: {
+                  kind: "deferred",
+                  reason,
+                  retryAtMs,
+                  ...(diagnostic === undefined ? {} : { diagnostic }),
+                  ...(reason === "credential-rejected"
+                    ? { rejectedCredential: credentialKey }
+                    : {}),
+                },
                 ...(state?.success === undefined
                   ? {}
                   : { success: state.success }),

@@ -600,6 +600,38 @@ describe("provider acquisition coordination", () => {
     const attempt = request(
       Effect.sync(() => {
         acquisitions += 1;
+        return { kind: "temporary" as const };
+      }),
+    );
+
+    const first = await Effect.runPromise(
+      createFileProviderAcquisitionCoordinator(dependencies).coordinate(
+        attempt,
+      ),
+    );
+    const second = await Effect.runPromise(
+      createFileProviderAcquisitionCoordinator(dependencies).coordinate(
+        attempt,
+      ),
+    );
+
+    assert.equal(acquisitions, 1);
+    assert.deepEqual(first, {
+      kind: "deferred",
+      reason: "temporary",
+      retryAtMs: 2_435,
+    });
+    assert.deepEqual(second, first);
+  });
+
+  test("suppresses malformed responses as long as terminal failures", async () => {
+    const root = await runtimeRoot();
+    const now = 1_000;
+    let acquisitions = 0;
+    const dependencies = { runtimeDirectory: root, now: () => now };
+    const attempt = request(
+      Effect.sync(() => {
+        acquisitions += 1;
         return { kind: "malformed" as const };
       }),
     );
@@ -619,9 +651,108 @@ describe("provider acquisition coordination", () => {
     assert.deepEqual(first, {
       kind: "deferred",
       reason: "malformed",
-      retryAtMs: 2_435,
+      retryAtMs: now + 900_000,
     });
     assert.deepEqual(second, first);
+  });
+
+  test("persists a bounded failure diagnostic for later inspection", async () => {
+    const root = await runtimeRoot();
+    const coordinator = createFileProviderAcquisitionCoordinator({
+      runtimeDirectory: root,
+      now: () => 1_000,
+    });
+    await Effect.runPromise(
+      coordinator.coordinate(
+        request(
+          Effect.succeed({
+            kind: "malformed" as const,
+            diagnostic: `five_hour.resets_at:\nExpected string${"!".repeat(500)}`,
+          }),
+        ),
+      ),
+    );
+
+    const contents = await storedContents(root);
+    assert.include(
+      contents,
+      '"diagnostic":"five_hour.resets_at: Expected string!!!',
+    );
+    assert.notInclude(contents, "!".repeat(200));
+    assert.notInclude(contents, "oauth-secret");
+  });
+
+  test("shares one account's state across refreshed credentials", async () => {
+    const root = await runtimeRoot();
+    let now = 1_000;
+    const coordinator = createFileProviderAcquisitionCoordinator({
+      runtimeDirectory: root,
+      now: () => now,
+    });
+    let acquisitions = 0;
+    const forCredential = (credential: string) => ({
+      ...request(
+        Effect.sync(() => {
+          acquisitions += 1;
+          return { kind: "temporary" as const, retryAtMs: 900_000 };
+        }),
+      ),
+      credential,
+      account: "account-a",
+    });
+
+    await Effect.runPromise(coordinator.coordinate(forCredential("token-1")));
+    now = 2_000;
+    const refreshed = await Effect.runPromise(
+      coordinator.coordinate(forCredential("token-2")),
+    );
+
+    assert.equal(acquisitions, 1);
+    assert.deepEqual(refreshed, {
+      kind: "deferred",
+      reason: "temporary",
+      retryAtMs: 900_000,
+    });
+    assert.notInclude(await storedContents(root), "account-a");
+  });
+
+  test("a rejected credential does not suppress its refreshed successor", async () => {
+    const root = await runtimeRoot();
+    const coordinator = createFileProviderAcquisitionCoordinator({
+      runtimeDirectory: root,
+      now: () => 1_000,
+    });
+    const attempts: string[] = [];
+    const forCredential = (credential: string) => ({
+      ...request(
+        Effect.sync(() => {
+          attempts.push(credential);
+          return credential === "token-1"
+            ? { kind: "credential-rejected" as const }
+            : {
+                kind: "success" as const,
+                value: { usedPercent: 12, resetsAtMs: 5_000_000 },
+              };
+        }),
+      ),
+      credential,
+      account: "account-a",
+    });
+
+    await Effect.runPromise(coordinator.coordinate(forCredential("token-1")));
+    const stale = await Effect.runPromise(
+      coordinator.coordinate(forCredential("token-1")),
+    );
+    const refreshed = await Effect.runPromise(
+      coordinator.coordinate(forCredential("token-2")),
+    );
+
+    assert.deepEqual(attempts, ["token-1", "token-2"]);
+    assert.equal(
+      stale.kind === "deferred" && stale.reason,
+      "credential-rejected",
+    );
+    assert.equal(refreshed.kind, "success");
   });
 
   test("removes superseded state generations", async () => {

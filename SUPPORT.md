@@ -29,6 +29,8 @@ Open a GitHub issue using the bug report form. Include:
 
 Never include credentials, account identifiers, raw authenticated responses, or unsanitized headers.
 
+If Claude shows `unavailable`, include the newest state file from `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-subscription-usage/acquisition-v1/entries/claude-subscription-usage-*/`. Its `outcome.diagnostic` field names the last failure, such as `HTTP 429` or the response field that failed to decode. It contains no credentials, and it keeps response values only when they're numbers, booleans, or `null`.
+
 ## Maintenance policy
 
 Only the latest release line receives fixes. We prioritize credential safety, provider compatibility regressions, crashes, incorrect usage values, and runaway polling. Feature requests are considered against maintenance cost and the extension's narrow scope.

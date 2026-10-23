@@ -59,13 +59,15 @@ Countdowns use absolute provider reset timestamps. They update at each visible b
 
 Claude usage reads the OAuth login from `${CLAUDE_CONFIG_DIR:-~/.claude}/.credentials.json`, matching `pi-claude-code-provider`. On POSIX systems, the credential file must be owned by the current user, use mode `0600`, and live in a current-user-owned directory that is not writable by group or other users. The extension rejects symlinks and expired access tokens.
 
-The token is sent only to Anthropic's fixed HTTPS usage endpoint. Credentials and raw provider responses are never logged or persisted.
+To keep usage across OAuth token refreshes, the extension also reads the signed-in account from Claude Code's `${CLAUDE_CONFIG_DIR:-~}/.claude.json`. That file must be owned by the current user and not writable by group or other users. When the account can't be read, usage is tied to the access token instead, and a refresh briefly shows `unavailable`.
+
+The token is sent only to Anthropic's fixed HTTPS usage endpoint. Credentials, account identifiers, and raw provider responses are never logged or persisted.
 
 ### Refresh behavior
 
 Each provider refreshes at startup and after relevant activity. Codex polls every minute and also observes `x-codex-*` response headers. Claude limits activity refreshes to once every three minutes and polls every fifteen minutes.
 
-Temporary failures use provider retry deadlines or bounded backoff. A failed Claude refresh retains the last successful observation as stale until its reported reset time when doing so is safe.
+Temporary failures use provider retry deadlines or bounded backoff. A Claude response that doesn't match the expected shape, or a rate-limit response, pauses Claude requests for fifteen minutes. A failed Claude refresh retains the last successful observation as stale until its reported reset time when doing so is safe.
 
 ### Platform limits
 
