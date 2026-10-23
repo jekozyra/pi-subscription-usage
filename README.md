@@ -61,6 +61,8 @@ Claude usage reads the OAuth login from `${CLAUDE_CONFIG_DIR:-~/.claude}/.creden
 
 To keep usage across OAuth token refreshes, the extension also reads the signed-in account from Claude Code's `${CLAUDE_CONFIG_DIR:-~}/.claude.json`. That file must be owned by the current user and not writable by group or other users. When the account can't be read, usage is tied to the access token instead, and a refresh briefly shows `unavailable`.
 
+Claude Code renews its access token only while it runs, so a token can expire whenever you haven't used Claude Code for a few hours. To keep usage visible, the extension checks the token every five minutes and, when it's expired or within five minutes of expiring, runs `claude -p hi --model haiku --no-session-persistence` once from a temporary directory. That uses a small amount of Claude usage, about three times a day. Only one Pi process runs it at a time, inherited `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_AUTH_TOKEN` values are removed so Claude Code renews its stored login, and failures back off for fifteen minutes. It runs only when Claude usage is read from Claude Code's login and `claude` is on `PATH`. Set `PI_SUBSCRIPTION_USAGE_RENEW_CLAUDE_CODE=0` to turn it off.
+
 The token is sent only to Anthropic's fixed HTTPS usage endpoint. Credentials, account identifiers, and raw provider responses are never logged or persisted.
 
 ### Refresh behavior

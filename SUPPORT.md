@@ -29,7 +29,7 @@ Open a GitHub issue using the bug report form. Include:
 
 Never include credentials, account identifiers, raw authenticated responses, or unsanitized headers.
 
-If Claude shows `unavailable`, include the newest state file from `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-subscription-usage/acquisition-v1/entries/claude-subscription-usage-*/`. Its `outcome.diagnostic` field names the last failure, such as `HTTP 429` or the response field that failed to decode. It contains no credentials, and it keeps response values only when they're numbers, booleans, or `null`.
+If Claude shows `unavailable`, include the newest state file from `${XDG_RUNTIME_DIR:-/run/user/<uid>}/pi-subscription-usage/acquisition-v1/entries/claude-subscription-usage-*/`. Its `outcome.diagnostic` field names the last failure, such as `HTTP 429` or the response field that failed to decode. It contains no credentials, and it keeps response values only when they're numbers, booleans, or `null`. Token renewal failures are recorded the same way under `claude-code-token-renewal-*/`.
 
 ## Maintenance policy
 
