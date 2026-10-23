@@ -4,6 +4,9 @@ import { test } from "vitest";
 
 import piUsage from "../index.ts";
 
+// Loading the real entry point must never run Claude Code from the test suite.
+process.env.PI_SUBSCRIPTION_USAGE_RENEW_CLAUDE_CODE = "0";
+
 test("package entry point registers the Codex quota lifecycle", () => {
   const events: string[] = [];
   const pi = {

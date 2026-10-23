@@ -115,9 +115,15 @@ async function accountForToken(
   return account;
 }
 
-async function readClaudeCodeAuthentication(): Promise<
-  ClaudeAuthentication | undefined
-> {
+interface ClaudeCodeOAuth {
+  readonly accessToken: string;
+  readonly refreshToken: string | undefined;
+  readonly expiresAtMs: number;
+  readonly globalConfigDirectory: string;
+}
+
+/** Reads Claude Code's stored OAuth login, expired or not. */
+async function readClaudeCodeOAuth(): Promise<ClaudeCodeOAuth | undefined> {
   const configuredDirectory = process.env.CLAUDE_CONFIG_DIR?.trim();
   const configDirectory = configuredDirectory || join(homedir(), ".claude");
   const credentialsPath = join(configDirectory, ".credentials.json");
@@ -136,30 +142,73 @@ async function readClaudeCodeAuthentication(): Promise<
     const oauth = Reflect.get(document, "claudeAiOauth");
     if (typeof oauth !== "object" || oauth === null) return undefined;
     const accessToken = Reflect.get(oauth, "accessToken");
+    const refreshToken = Reflect.get(oauth, "refreshToken");
     const expiresAt = Reflect.get(oauth, "expiresAt");
     if (
       typeof accessToken !== "string" ||
       accessToken.trim() === "" ||
       typeof expiresAt !== "number" ||
-      !Number.isFinite(expiresAt) ||
-      expiresAt <= Date.now() + TOKEN_EXPIRY_MARGIN_MS
+      !Number.isFinite(expiresAt)
     ) {
       return undefined;
     }
-
-    const token = accessToken.trim();
-    const accountId = await accountForToken(
-      token,
-      configuredDirectory || homedir(),
-    );
     return {
-      source: "OAuth",
-      auth: { apiKey: token },
-      ...(accountId === undefined ? {} : { accountId }),
+      accessToken: accessToken.trim(),
+      refreshToken:
+        typeof refreshToken === "string" && refreshToken.trim() !== ""
+          ? refreshToken.trim()
+          : undefined,
+      expiresAtMs: expiresAt,
+      globalConfigDirectory: configuredDirectory || homedir(),
     };
   } catch {
     return undefined;
   }
+}
+
+async function readClaudeCodeAuthentication(): Promise<
+  ClaudeAuthentication | undefined
+> {
+  const oauth = await readClaudeCodeOAuth();
+  if (
+    oauth === undefined ||
+    oauth.expiresAtMs <= Date.now() + TOKEN_EXPIRY_MARGIN_MS
+  ) {
+    return undefined;
+  }
+  const accountId = await accountForToken(
+    oauth.accessToken,
+    oauth.globalConfigDirectory,
+  );
+  return {
+    source: "OAuth",
+    auth: { apiKey: oauth.accessToken },
+    ...(accountId === undefined ? {} : { accountId }),
+  };
+}
+
+export interface ClaudeCodeTokenState {
+  readonly expiresAtMs: number;
+  /** Secret; used only in memory to key renewal coordination. */
+  readonly renewalCredential: string;
+  readonly accountId?: string;
+}
+
+/** Describes a renewable Claude Code login, whether or not it has expired. */
+export async function readClaudeCodeTokenState(): Promise<
+  ClaudeCodeTokenState | undefined
+> {
+  const oauth = await readClaudeCodeOAuth();
+  if (oauth?.refreshToken === undefined) return undefined;
+  const accountId = await accountForToken(
+    oauth.accessToken,
+    oauth.globalConfigDirectory,
+  );
+  return {
+    expiresAtMs: oauth.expiresAtMs,
+    renewalCredential: oauth.refreshToken,
+    ...(accountId === undefined ? {} : { accountId }),
+  };
 }
 
 function isOAuthAuthentication(
@@ -172,12 +221,31 @@ function isOAuthAuthentication(
   );
 }
 
+function hasClaudeCodeProvider(ctx: ExtensionContext): boolean {
+  return (
+    ctx.modelRegistry.find?.("pi-claude-code-provider", "sonnet") !== undefined
+  );
+}
+
+/** Whether Claude usage would be read with Claude Code's login. */
+export async function usesClaudeCodeCredentials(
+  ctx: ExtensionContext,
+): Promise<boolean> {
+  if (hasClaudeCodeProvider(ctx)) return true;
+  try {
+    return !isOAuthAuthentication(
+      await ctx.modelRegistry.getProviderAuth("anthropic"),
+    );
+  } catch {
+    return true;
+  }
+}
+
 export async function resolveClaudeSubscriptionAuthentication(
   ctx: ExtensionContext,
 ): Promise<ClaudeAuthentication | undefined> {
-  const hasClaudeCodeProvider =
-    ctx.modelRegistry.find?.("pi-claude-code-provider", "sonnet") !== undefined;
-  if (hasClaudeCodeProvider) {
+  const claudeCodeProvider = hasClaudeCodeProvider(ctx);
+  if (claudeCodeProvider) {
     const claudeCodeAuthentication = await readClaudeCodeAuthentication();
     if (claudeCodeAuthentication !== undefined) return claudeCodeAuthentication;
   }
@@ -189,5 +257,5 @@ export async function resolveClaudeSubscriptionAuthentication(
     // Fall through to Claude Code credentials.
   }
 
-  return hasClaudeCodeProvider ? undefined : readClaudeCodeAuthentication();
+  return claudeCodeProvider ? undefined : readClaudeCodeAuthentication();
 }
