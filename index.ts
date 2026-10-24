@@ -50,6 +50,9 @@ function displayDirectory(cwd: string): string {
       : cwd;
 }
 
+/** Model quality degrades past this many context tokens, whatever the window. */
+const CONTEXT_DEGRADATION_TOKENS = 250_000;
+
 /** Matches the token format of Pi's built-in footer. */
 export function formatTokens(count: number): string {
   if (count < 1000) return count.toString();
@@ -76,9 +79,15 @@ export function contextUsageSegment(
   const percent = usage?.percent ?? null;
   const text = `${percent === null ? "?" : `${percent.toFixed(1)}%`}/${formatTokens(contextWindow)}`;
   const value = percent ?? 0;
+  const tokens = usage?.tokens ?? 0;
   return {
     text,
-    color: value > 90 ? "error" : value > 70 ? "warning" : "dim",
+    color:
+      value > 90
+        ? "error"
+        : value > 70 || tokens >= CONTEXT_DEGRADATION_TOKENS
+          ? "warning"
+          : "dim",
   };
 }
 

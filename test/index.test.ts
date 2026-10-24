@@ -167,6 +167,14 @@ test("context usage matches Pi's footer format and thresholds", () => {
     { text: "90.1%/200k", color: "error" },
   );
   assert.deepEqual(
+    segment({ tokens: 249_999, contextWindow: 1_000_000, percent: 25 }),
+    { text: "25.0%/1.0M", color: "dim" },
+  );
+  assert.deepEqual(
+    segment({ tokens: 250_000, contextWindow: 1_000_000, percent: 25 }),
+    { text: "25.0%/1.0M", color: "warning" },
+  );
+  assert.deepEqual(
     segment({ tokens: null, contextWindow: 200_000, percent: null }),
     { text: "?/200k", color: "dim" },
   );

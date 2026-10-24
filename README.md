@@ -42,7 +42,7 @@ pi -e .
 
 ## Usage
 
-Start Pi in TUI mode after installation. The extension replaces the default footer with the current directory, model selection, and context usage, followed by Claude and Codex subscription usage. Context usage uses the same format and colors as Pi's footer, such as `38.0%/200k`: yellow above 70% and red above 90%. It shows `?` right after compaction, until the next response. On narrow terminals, the directory is shortened first, then context usage is hidden.
+Start Pi in TUI mode after installation. The extension replaces the default footer with the current directory, model selection, and context usage, followed by Claude and Codex subscription usage. Context usage uses the same format and colors as Pi's footer, such as `38.0%/200k`: yellow above 70% of the window or from 250k tokens, where model quality starts to degrade, and red above 90%. It shows `?` right after compaction, until the next response. On narrow terminals, the directory is shortened first, then context usage is hidden.
 
 Sign in to Pi's `openai-codex` provider with `/login`. Sign in to Claude Code with a Claude Pro or Max subscription. Both providers remain visible when another model is selected.
 
