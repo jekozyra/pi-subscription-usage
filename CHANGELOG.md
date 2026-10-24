@@ -4,10 +4,13 @@ All notable changes to this project are documented here. Releases follow [Semant
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-24
+
 ### Added
 
-- Showed context usage to the right of the model in the footer, as Pi's built-in footer does
+- Showed context usage to the right of the model in the footer, as Pi's built-in footer does, with a warning color from 250k tokens
 - Renewed an expiring Claude Code login by running Claude Code once, so Claude usage no longer disappears after a few hours without Claude Code activity. Set `PI_SUBSCRIPTION_USAGE_RENEW_CLAUDE_CODE=0` to opt out.
+- Recorded the last Claude failure reason in the shared state file for troubleshooting
 
 ### Fixed
 
@@ -15,10 +18,7 @@ All notable changes to this project are documented here. Releases follow [Semant
 - Treated a missing Claude utilization value as unknown rather than zero
 - Paused Claude requests for fifteen minutes after a response that doesn't match the expected shape, instead of retrying every minute and tripping the provider rate limit
 - Kept Claude usage and shared backoff across OAuth token refreshes when Claude Code records the signed-in account
-
-### Added
-
-- Recorded the last Claude failure reason in the shared state file for troubleshooting
+- Kept the test suite out of the real `/run/user/<uid>` runtime directory
 
 ## [0.1.1] - 2026-10-22
 
