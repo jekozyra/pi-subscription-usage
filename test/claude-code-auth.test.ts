@@ -10,7 +10,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveClaudeSubscriptionAuthentication } from "../src/claude-code-auth.ts";
+import {
+  readClaudeCodeTokenState,
+  resolveClaudeSubscriptionAuthentication,
+  usesClaudeCodeCredentials,
+} from "../src/claude-code-auth.ts";
 
 const originalConfigDirectory = process.env.CLAUDE_CONFIG_DIR;
 const temporaryDirectories: string[] = [];
@@ -51,6 +55,7 @@ async function writeClaudeCredentials(
     mode?: number;
     expiresAt?: number;
     accessToken?: string;
+    refreshToken?: string;
     directory?: string;
   } = {},
 ): Promise<string> {
@@ -62,6 +67,9 @@ async function writeClaudeCredentials(
       claudeAiOauth: {
         accessToken: options.accessToken ?? "claude-code-token",
         expiresAt: options.expiresAt ?? Date.now() + 60_000,
+        ...(options.refreshToken === undefined
+          ? {}
+          : { refreshToken: options.refreshToken }),
       },
     }),
     { mode: options.mode ?? 0o600 },
@@ -235,4 +243,49 @@ describe("resolveClaudeSubscriptionAuthentication", () => {
       ).toBeUndefined();
     },
   );
+
+  it("describes an expired but renewable Claude Code login", async () => {
+    const expiresAt = Date.now() - 60_000;
+    const credentialsPath = await writeClaudeCredentials({
+      accessToken: "renewal-token-1",
+      refreshToken: "refresh-secret",
+      expiresAt,
+    });
+    await writeClaudeAccount(join(credentialsPath, ".."), {
+      oauthAccount: { accountUuid: "account-r" },
+    });
+
+    expect(
+      await resolveClaudeSubscriptionAuthentication(
+        contextWithAuthentication(),
+      ),
+    ).toBeUndefined();
+    expect(await readClaudeCodeTokenState()).toEqual({
+      expiresAtMs: expiresAt,
+      renewalCredential: "refresh-secret",
+      accountId: "account-r/",
+    });
+  });
+
+  it("cannot renew a Claude Code login without a refresh token", async () => {
+    await writeClaudeCredentials({ accessToken: "renewal-token-2" });
+    expect(await readClaudeCodeTokenState()).toBeUndefined();
+  });
+
+  it("uses Claude Code credentials unless Pi has its own Anthropic OAuth", async () => {
+    const piOAuth = { source: "OAuth", auth: { apiKey: "pi-token" } };
+    expect(
+      await usesClaudeCodeCredentials(contextWithAuthentication(piOAuth, true)),
+    ).toBe(true);
+    expect(
+      await usesClaudeCodeCredentials(
+        contextWithAuthentication(piOAuth, false),
+      ),
+    ).toBe(false);
+    expect(
+      await usesClaudeCodeCredentials(
+        contextWithAuthentication(undefined, false),
+      ),
+    ).toBe(true);
+  });
 });

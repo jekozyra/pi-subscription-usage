@@ -6,7 +6,15 @@ import type {
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
 
-import { resolveClaudeSubscriptionAuthentication } from "./src/claude-code-auth.ts";
+import {
+  readClaudeCodeTokenState,
+  resolveClaudeSubscriptionAuthentication,
+  usesClaudeCodeCredentials,
+} from "./src/claude-code-auth.ts";
+import {
+  createClaudeCodeTokenRenewal,
+  makeRunClaudeCode,
+} from "./src/claude-code-token-renewal.ts";
 import { createAcquireClaudeSubscriptionUsage } from "./src/claude-subscription-usage-acquisition.ts";
 import { createAcquireDedicatedWeeklyQuotaUsage } from "./src/dedicated-weekly-quota-acquisition.ts";
 import { createFileProviderAcquisitionCoordinator } from "./src/provider-acquisition-coordinator.ts";
@@ -86,8 +94,15 @@ function installSubscriptionFooter(ctx: ExtensionContext): void {
   });
 }
 
+const TOKEN_RENEWAL_OPT_OUT = "PI_SUBSCRIPTION_USAGE_RENEW_CLAUDE_CODE";
+
 export default function piUsage(pi: ExtensionAPI): void {
   const acquisitionCoordinator = createFileProviderAcquisitionCoordinator();
+  const renewClaudeCodeToken = createClaudeCodeTokenRenewal({
+    readTokenState: Effect.promise(() => readClaudeCodeTokenState()),
+    runClaudeCode: makeRunClaudeCode(),
+    acquisitionCoordinator,
+  });
   registerWeeklySubscriptionUsage(pi, {
     acquireDedicatedWeeklyQuotaUsage: createAcquireDedicatedWeeklyQuotaUsage({
       fetch,
@@ -107,6 +122,18 @@ export default function piUsage(pi: ExtensionAPI): void {
             ),
           ),
       }),
+    ...(process.env[TOKEN_RENEWAL_OPT_OUT] === "0"
+      ? {}
+      : {
+          renewClaudeCodeToken: (ctx: ExtensionContext) =>
+            Effect.promise(() => usesClaudeCodeCredentials(ctx)).pipe(
+              Effect.flatMap((uses) =>
+                uses
+                  ? renewClaudeCodeToken
+                  : Effect.succeed("unavailable" as const),
+              ),
+            ),
+        }),
   });
 
   pi.on("session_start", (_event, ctx) => {

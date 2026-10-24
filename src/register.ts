@@ -4,6 +4,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Clock, Effect } from "effect";
 import { resolveClaudeSubscriptionAuthentication } from "./claude-code-auth.ts";
+import type { ClaudeCodeTokenRenewalResult } from "./claude-code-token-renewal.ts";
 import {
   type AcquireClaudeSubscriptionUsage,
   claudeCredentialFingerprint,
@@ -17,6 +18,7 @@ import { presentSubscriptionUsageLines } from "./presentation.ts";
 import { makeWeeklySubscriptionUsageSession } from "./weekly-subscription-usage-session.ts";
 
 const STATUS_KEY = "pi-subscription-usage";
+const TOKEN_RENEWAL_CHECK_INTERVAL_MS = 5 * 60_000;
 
 export interface WeeklySubscriptionUsageDependencies {
   readonly acquireDedicatedWeeklyQuotaUsage: AcquireDedicatedWeeklyQuotaUsage;
@@ -25,6 +27,11 @@ export interface WeeklySubscriptionUsageDependencies {
   ) => AcquireClaudeSubscriptionUsage;
   readonly now?: Effect.Effect<number>;
   readonly random?: Effect.Effect<number>;
+  /** Checked at session start and every five minutes while it runs. */
+  readonly renewClaudeCodeToken?: (
+    ctx: ExtensionContext,
+  ) => Effect.Effect<ClaudeCodeTokenRenewalResult>;
+  readonly tokenRenewalCheckIntervalMs?: number;
 }
 
 function accountIdFromAccessToken(accessToken: string): string | undefined {
@@ -108,9 +115,44 @@ export function registerWeeklySubscriptionUsage(
   const session = Effect.runSync(makeWeeklySubscriptionUsageSession());
   const now = dependencies.now ?? Clock.currentTimeMillis;
   const run = (effect: Effect.Effect<void>) => Effect.runPromise(effect);
+  let stopTokenRenewal: (() => void) | undefined;
+
+  const startTokenRenewal = (ctx: ExtensionContext) => {
+    stopTokenRenewal?.();
+    const renew = dependencies.renewClaudeCodeToken?.(ctx);
+    if (renew === undefined) return;
+    let checking = false;
+    const check = () => {
+      if (checking) return;
+      checking = true;
+      void run(
+        renew.pipe(
+          Effect.flatMap((result) =>
+            result === "renewed"
+              ? session.refreshAfterActivity("Claude")
+              : Effect.void,
+          ),
+          Effect.catchAllCause(() => Effect.void),
+          Effect.ensuring(Effect.sync(() => (checking = false))),
+        ),
+      );
+    };
+    const timer = setInterval(
+      check,
+      dependencies.tokenRenewalCheckIntervalMs ??
+        TOKEN_RENEWAL_CHECK_INTERVAL_MS,
+    );
+    timer.unref?.();
+    stopTokenRenewal = () => {
+      clearInterval(timer);
+      stopTokenRenewal = undefined;
+    };
+    check();
+  };
 
   pi.on("session_start", async (_event, ctx) => {
     if (ctx.mode !== "tui") {
+      stopTokenRenewal?.();
       await run(session.shutdown);
       return;
     }
@@ -150,6 +192,7 @@ export function registerWeeklySubscriptionUsage(
         }),
       }),
     );
+    startTokenRenewal(ctx);
   });
 
   pi.on("after_provider_response", async (event, ctx) => {
@@ -175,6 +218,7 @@ export function registerWeeklySubscriptionUsage(
   });
 
   pi.on("session_shutdown", async () => {
+    stopTokenRenewal?.();
     await run(session.shutdown);
   });
 }

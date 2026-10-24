@@ -4,6 +4,10 @@ All notable changes to this project are documented here. Releases follow [Semant
 
 ## [Unreleased]
 
+### Added
+
+- Renewed an expiring Claude Code login by running Claude Code once, so Claude usage no longer disappears after a few hours without Claude Code activity. Set `PI_SUBSCRIPTION_USAGE_RENEW_CLAUDE_CODE=0` to opt out.
+
 ### Fixed
 
 - Accepted Claude's idle five-hour window, which reports no reset time, instead of marking all Claude usage unavailable

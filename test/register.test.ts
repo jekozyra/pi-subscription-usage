@@ -5,7 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
 import { test } from "vitest";
-
+import type { ClaudeCodeTokenRenewalResult } from "../src/claude-code-token-renewal.ts";
 import {
   type AcquiredClaudeSubscriptionUsage,
   ClaudeAuthenticationUnavailable,
@@ -42,7 +42,7 @@ type ExtensionHandler = (
   ctx: ExtensionContext,
 ) => void | Promise<void>;
 
-function registerFixture() {
+function registerFixture(options: { readonly tokenRenewal?: boolean } = {}) {
   const handlers = new Map<string, ExtensionHandler[]>();
   const pi = {
     on(event: string, handler: ExtensionHandler) {
@@ -68,6 +68,8 @@ function registerFixture() {
     availableLimitResetCredits: 2,
   });
   let claudeReads = 0;
+  let renewalChecks = 0;
+  let renewalResult: ClaudeCodeTokenRenewalResult = "not-due";
   let claudeAcquisition: Effect.Effect<
     AcquiredClaudeSubscriptionUsage,
     PermanentClaudeSubscriptionUsageFailure | ClaudeAuthenticationUnavailable
@@ -90,6 +92,16 @@ function registerFixture() {
       claudeReads += 1;
       return claudeAcquisition;
     },
+    ...(options.tokenRenewal === true
+      ? {
+          renewClaudeCodeToken: () =>
+            Effect.sync(() => {
+              renewalChecks += 1;
+              return renewalResult;
+            }),
+          tokenRenewalCheckIntervalMs: 10,
+        }
+      : {}),
   });
 
   const ctx = {
@@ -130,6 +142,10 @@ function registerFixture() {
     emit,
     observedCredentials,
     claudeReads: () => claudeReads,
+    renewalChecks: () => renewalChecks,
+    setRenewalResult: (value: ClaudeCodeTokenRenewalResult) => {
+      renewalResult = value;
+    },
     statuses,
     setMode: (value: ExtensionContext["mode"]) => {
       mode = value;
@@ -321,6 +337,38 @@ test("Claude Code provider activity refreshes Claude usage", async () => {
 
   assert.deepEqual([f.observedCredentials.length, f.claudeReads()], [1, 2]);
   await f.emit("session_shutdown");
+});
+
+const settle = (ms: number) =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+test("a renewed Claude Code token refreshes Claude usage", async () => {
+  const f = registerFixture({ tokenRenewal: true });
+  f.setClaudeAcquisition(Effect.fail(new ClaudeAuthenticationUnavailable()));
+  await f.emit("session_start");
+  await settle(0);
+  assert.equal(f.renewalChecks(), 1);
+  assert.equal(f.claudeReads(), 1);
+
+  await settle(35);
+  assert.ok(f.renewalChecks() > 1);
+  assert.equal(f.claudeReads(), 1, "an unrenewed check does not refetch");
+
+  f.setClaudeAcquisition(
+    Effect.succeed({
+      usedPercent: 20,
+      resetsAtMs: 2_000_000,
+      credentialFingerprint: anthropicCredentialFingerprint(),
+    }),
+  );
+  f.setRenewalResult("renewed");
+  await settle(35);
+  assert.equal(f.claudeReads(), 2);
+
+  await f.emit("session_shutdown");
+  const checks = f.renewalChecks();
+  await settle(35);
+  assert.equal(f.renewalChecks(), checks, "shutdown stops renewal checks");
 });
 
 test("responses from another provider are ignored", async () => {
