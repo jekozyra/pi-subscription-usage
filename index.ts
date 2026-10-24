@@ -50,6 +50,47 @@ function displayDirectory(cwd: string): string {
       : cwd;
 }
 
+/** Model quality degrades past this many context tokens, whatever the window. */
+const CONTEXT_DEGRADATION_TOKENS = 250_000;
+
+/** Matches the token format of Pi's built-in footer. */
+export function formatTokens(count: number): string {
+  if (count < 1000) return count.toString();
+  if (count < 10_000) return `${(count / 1000).toFixed(1)}k`;
+  if (count < 1_000_000) return `${Math.round(count / 1000)}k`;
+  if (count < 10_000_000) return `${(count / 1_000_000).toFixed(1)}M`;
+  return `${Math.round(count / 1_000_000)}M`;
+}
+
+/** Context usage as Pi's built-in footer shows it, or nothing when unknown. */
+export function contextUsageSegment(
+  ctx: Pick<ExtensionContext, "getContextUsage" | "model">,
+):
+  | { readonly text: string; readonly color: "dim" | "warning" | "error" }
+  | undefined {
+  let usage: ReturnType<ExtensionContext["getContextUsage"]>;
+  try {
+    usage = ctx.getContextUsage();
+  } catch {
+    usage = undefined;
+  }
+  const contextWindow = usage?.contextWindow ?? ctx.model?.contextWindow ?? 0;
+  if (!(contextWindow > 0)) return undefined;
+  const percent = usage?.percent ?? null;
+  const text = `${percent === null ? "?" : `${percent.toFixed(1)}%`}/${formatTokens(contextWindow)}`;
+  const value = percent ?? 0;
+  const tokens = usage?.tokens ?? 0;
+  return {
+    text,
+    color:
+      value > 90
+        ? "error"
+        : value > 70 || tokens >= CONTEXT_DEGRADATION_TOKENS
+          ? "warning"
+          : "dim",
+  };
+}
+
 function installSubscriptionFooter(ctx: ExtensionContext): void {
   ctx.ui.setFooter((tui, theme, footerData) => {
     const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
@@ -63,14 +104,25 @@ function installSubscriptionFooter(ctx: ExtensionContext): void {
           ? `(${model.provider}) ${model.id}${effort ? ` • ${effort}` : ""}`
           : "no model selected";
         const directory = displayDirectory(ctx.cwd);
-        const rightWidth = visibleWidth(modelText);
+        const context = contextUsageSegment(ctx);
+        const modelWidth = visibleWidth(modelText);
+        // Context usage sits at the far right. The directory gives way first,
+        // then context usage; the model stays.
+        const showContext =
+          context !== undefined &&
+          width - modelWidth - visibleWidth(context.text) - 2 >= 2;
+        const rightWidth =
+          modelWidth + (showContext ? visibleWidth(context.text) + 2 : 0);
+        const right = `${theme.fg("dim", modelText)}${
+          showContext ? `  ${theme.fg(context.color, context.text)}` : ""
+        }`;
         const leftWidth = Math.max(0, width - rightWidth - 1);
         const left = truncateToWidth(directory, leftWidth, "…");
         const padding = " ".repeat(
           Math.max(1, width - visibleWidth(left) - rightWidth),
         );
         const heading = truncateToWidth(
-          `${theme.fg("dim", left)}${padding}${theme.fg("dim", modelText)}`,
+          `${theme.fg("dim", left)}${padding}${right}`,
           width,
           "",
         );
