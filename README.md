@@ -23,7 +23,7 @@ Pi requires Node.js 22.19 or newer for this package.
 Install a tagged release from GitHub:
 
 ```bash
-pi install git:github.com/jekozyra/pi-subscription-usage@v0.1.0
+pi install git:github.com/jekozyra/pi-subscription-usage@v0.2.0
 ```
 
 Review the source before installing it. Pi extensions run with full system access.
