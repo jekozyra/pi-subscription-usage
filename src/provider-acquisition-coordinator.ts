@@ -95,6 +95,8 @@ interface CoordinatorOptions {
   readonly leaseStaleMs?: number;
   readonly heartbeatMs?: number;
   readonly followerWaitMs?: number;
+  /** Parent of per-user runtime directories; tests override the real one. */
+  readonly userRuntimeRoot?: string;
 }
 
 interface StoredSuccess {
@@ -198,6 +200,7 @@ async function initializeSecret(root: string): Promise<Buffer> {
 
 async function initializeRuntime(
   requestedRuntimeDirectory: string | undefined,
+  userRuntimeRoot: string,
 ): Promise<Runtime> {
   if (process.platform !== "linux") throw new Error("Linux is required");
   const runtimeDirectory =
@@ -205,7 +208,7 @@ async function initializeRuntime(
     process.env.XDG_RUNTIME_DIR ??
     (process.getuid === undefined
       ? undefined
-      : `/run/user/${process.getuid()}`);
+      : join(userRuntimeRoot, String(process.getuid())));
   if (runtimeDirectory === undefined || !isAbsolute(runtimeDirectory)) {
     throw new Error("a secure XDG_RUNTIME_DIR is required");
   }
@@ -563,7 +566,10 @@ export function createFileProviderAcquisitionCoordinator(
 
   const runtime = Effect.tryPromise({
     try: async () => {
-      runtimePromise ??= initializeRuntime(options.runtimeDirectory);
+      runtimePromise ??= initializeRuntime(
+        options.runtimeDirectory,
+        options.userRuntimeRoot ?? "/run/user",
+      );
       return runtimePromise;
     },
     catch: coordinationUnavailable,

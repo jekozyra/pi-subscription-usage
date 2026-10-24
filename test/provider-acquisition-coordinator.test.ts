@@ -2,7 +2,6 @@ import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
-  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -123,23 +122,20 @@ function runWorker(arguments_: readonly string[]): Promise<string> {
 describe("provider acquisition coordination", () => {
   test("uses the private /run/user/<uid> directory when XDG_RUNTIME_DIR is unset", async (context) => {
     const uid = process.getuid?.();
-    const directory = `/run/user/${uid}`;
-    const info = await lstat(directory).catch(() => undefined);
-    if (
-      process.platform !== "linux" ||
-      uid === undefined ||
-      info?.uid !== uid ||
-      !info.isDirectory() ||
-      (info.mode & 0o077) !== 0
-    ) {
+    if (process.platform !== "linux" || uid === undefined) {
       context.skip();
       return;
     }
+    const userRuntimeRoot = await runtimeRoot();
+    const directory = join(userRuntimeRoot, String(uid));
+    await mkdir(directory, { mode: 0o700 });
 
     const original = process.env.XDG_RUNTIME_DIR;
     delete process.env.XDG_RUNTIME_DIR;
     try {
-      const coordinator = createFileProviderAcquisitionCoordinator();
+      const coordinator = createFileProviderAcquisitionCoordinator({
+        userRuntimeRoot,
+      });
       const outcome = await Effect.runPromise(
         coordinator.coordinate({
           ...request(
@@ -152,6 +148,7 @@ describe("provider acquisition coordination", () => {
         }),
       );
       assert.equal(outcome.kind, "success");
+      assert.deepEqual(await readdir(directory), ["pi-subscription-usage"]);
     } finally {
       if (original === undefined) delete process.env.XDG_RUNTIME_DIR;
       else process.env.XDG_RUNTIME_DIR = original;
