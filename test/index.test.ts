@@ -189,7 +189,7 @@ test("context usage matches Pi's footer format and thresholds", () => {
   );
 });
 
-test("the heading shows context usage beside the model and drops it when narrow", async () => {
+test("the heading shows context usage right of the model and drops it when narrow", async () => {
   type Handler = (event: unknown, context: unknown) => void | Promise<void>;
   const handlers = new Map<string, Handler[]>();
   const pi = {
@@ -235,12 +235,12 @@ test("the heading shows context usage beside the model and drops it when narrow"
 
   assert.equal(
     strip(footer.render(60)[0]),
-    "/workspace/project       75.0%/200k  (anthropic) opus • high",
+    "/workspace/project       (anthropic) opus • high  75.0%/200k",
   );
   assert.ok(footer.render(60)[0]?.includes("\x1b[33m75.0%/200k"));
   assert.equal(
     strip(footer.render(42)[0]),
-    "/work… 75.0%/200k  (anthropic) opus • high",
+    "/work… (anthropic) opus • high  75.0%/200k",
   );
   assert.equal(strip(footer.render(30)[0]), "/work… (anthropic) opus • high");
 });

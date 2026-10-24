@@ -97,15 +97,16 @@ function installSubscriptionFooter(ctx: ExtensionContext): void {
         const directory = displayDirectory(ctx.cwd);
         const context = contextUsageSegment(ctx);
         const modelWidth = visibleWidth(modelText);
-        // The directory gives way first, then context usage; the model stays.
+        // Context usage sits at the far right. The directory gives way first,
+        // then context usage; the model stays.
         const showContext =
           context !== undefined &&
           width - modelWidth - visibleWidth(context.text) - 2 >= 2;
         const rightWidth =
           modelWidth + (showContext ? visibleWidth(context.text) + 2 : 0);
-        const right = `${
-          showContext ? `${theme.fg(context.color, context.text)}  ` : ""
-        }${theme.fg("dim", modelText)}`;
+        const right = `${theme.fg("dim", modelText)}${
+          showContext ? `  ${theme.fg(context.color, context.text)}` : ""
+        }`;
         const leftWidth = Math.max(0, width - rightWidth - 1);
         const left = truncateToWidth(directory, leftWidth, "…");
         const padding = " ".repeat(
