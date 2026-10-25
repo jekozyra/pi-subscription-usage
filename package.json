@@ -26,10 +26,10 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.5.15",
+    "@biomejs/biome": "^2.6.2",
     "@earendil-works/pi-coding-agent": "^0.85.1",
     "@effect/vitest": "^0.30.0",
-    "@types/node": "^26.5.1",
+    "@types/node": "^26.6.5",
     "typescript": "^5.9.3",
     "vitest": "^3.2.7"
   },
